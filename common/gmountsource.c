@@ -162,18 +162,17 @@ ask_password_reply (DBusMessage *reply,
 		    GError      *error,
 		    gpointer     _data)
 {
-  GSimpleAsyncResult *result;
+  GTask *task;
   AskPasswordData *data;
   dbus_bool_t handled, aborted, anonymous;
   guint32 password_save;
   const char *password, *username, *domain;
   DBusMessageIter iter;
 
-  result = G_SIMPLE_ASYNC_RESULT (_data);
+  task = G_TASK (_data);
   handled = TRUE;
   
   data = g_new0 (AskPasswordData, 1);
-  g_simple_async_result_set_op_res_gpointer (result, data, ask_password_data_free);
 
   if (reply == NULL)
     {
@@ -209,13 +208,15 @@ ask_password_reply (DBusMessage *reply,
 	}
     }
 
-  if (handled == FALSE)
+  if (handled == TRUE)
+    g_task_return_pointer (task, data, ask_password_data_free);
+  else
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED, "Internal Error");
+      ask_password_data_free (data);
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "Internal Error");
     }
 
-  g_simple_async_result_complete (result);
-  g_object_unref (result);
+  g_object_unref (task);
 }
 
 void
@@ -227,7 +228,7 @@ g_mount_source_ask_password_async (GMountSource              *source,
                                    GAsyncReadyCallback        callback,
                                    gpointer                   user_data)
 {
-  GSimpleAsyncResult *result;
+  GTask *task;
   DBusMessage *message;
   guint32 flags_as_int;
  
@@ -235,11 +236,9 @@ g_mount_source_ask_password_async (GMountSource              *source,
   /* If no dbus id specified, reply that we weren't handled */
   if (source->dbus_id[0] == 0)
     { 
-      g_simple_async_report_error_in_idle (G_OBJECT (source),
-					   callback,
-					   user_data,
-					   G_IO_ERROR, G_IO_ERROR_FAILED, 
-					   "Internal Error"); 
+      g_task_report_new_error (source, callback, user_data,
+			       G_IO_ERROR, G_IO_ERROR_FAILED, 
+			       "Internal Error"); 
       return;
     }
 
@@ -264,13 +263,11 @@ g_mount_source_ask_password_async (GMountSource              *source,
 			       DBUS_TYPE_UINT32, &flags_as_int,
 			       0);
 
-  result = g_simple_async_result_new (G_OBJECT (source), callback, user_data, 
-                                      g_mount_source_ask_password_async);
+  task = g_task_new (source, cancellable, callback, user_data);
   /* 30 minute timeout */
   _g_dbus_connection_call_async (NULL, message, 1000 * 60 * 30,
-				 ask_password_reply, result);
+				 ask_password_reply, task);
   dbus_message_unref (message);
-
 }
 
 /**
@@ -306,35 +303,26 @@ g_mount_source_ask_password_finish (GMountSource  *source,
 				    GPasswordSave *password_save_out)
 {
   AskPasswordData *data, def = { TRUE, };
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  simple = G_SIMPLE_ASYNC_RESULT (result);
+  task = G_TASK (result);
 
-  if (g_simple_async_result_propagate_error (simple, NULL))
+  if (g_task_had_error (task))
     data = &def;
   else
-    data = (AskPasswordData *) g_simple_async_result_get_op_res_gpointer (simple);
+    data = g_task_propagate_pointer (task, NULL);
 
   if (aborted)
     *aborted = data->aborted;
 
   if (password_out)
-    {
-      *password_out = data->password;
-      data->password = NULL;
-    }
+    *password_out = data->password;
 
   if (user_out)
-    {
-      *user_out = data->username;
-      data->username = NULL;
-    }
+    *user_out = data->username;
 
   if (domain_out)
-    {
-      *domain_out = data->domain;
-      data->domain = NULL;
-    }
+    *domain_out = data->domain;
 
   if (anonymous_out)
     *anonymous_out = data->anonymous;
@@ -342,7 +330,13 @@ g_mount_source_ask_password_finish (GMountSource  *source,
   if (password_save_out)
     *password_save_out = data->password_save;  
   
-  return data != &def;
+  if (data == &def)
+    return FALSE;
+  else
+    {
+      g_free (data);
+      return TRUE;
+    }
 }
 
 
@@ -497,17 +491,16 @@ ask_question_reply (DBusMessage *reply,
 		    GError      *error,
 		    gpointer     _data)
 {
-  GSimpleAsyncResult *result;
+  GTask *task;
   AskQuestionData *data;
   dbus_bool_t handled, aborted;
   guint32 choice;
   DBusMessageIter iter;
 
-  result = G_SIMPLE_ASYNC_RESULT (_data);
+  task = G_TASK (_data);
   handled = TRUE;
   
   data = g_new0 (AskQuestionData, 1);
-  g_simple_async_result_set_op_res_gpointer (result, data, g_free);
 
   if (reply == NULL)
     {
@@ -529,13 +522,15 @@ ask_question_reply (DBusMessage *reply,
 	}
     }
 
-  if (handled == FALSE)
+  if (handled == TRUE)
+    g_task_return_pointer (task, data, g_free);
+  else
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED, "Internal Error");
+      g_free (data);
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "Internal Error");
     }
 
-  g_simple_async_result_complete (result);
-  g_object_unref (result);
+  g_object_unref (task);
 }
 
 gboolean
@@ -592,17 +587,15 @@ g_mount_source_ask_question_async (GMountSource       *source,
 				   GAsyncReadyCallback callback,
 				   gpointer            user_data)
 {
-  GSimpleAsyncResult *result;
+  GTask *task;
   DBusMessage *message;
 
   /* If no dbus id specified, reply that we weren't handled */
   if (source->dbus_id[0] == 0)
     { 
-      g_simple_async_report_error_in_idle (G_OBJECT (source),
-					   callback,
-					   user_data,
-					   G_IO_ERROR, G_IO_ERROR_FAILED, 
-					   "Internal Error"); 
+      g_task_report_new_error (source, callback, user_data,
+			       G_IO_ERROR, G_IO_ERROR_FAILED, 
+			       "Internal Error"); 
       return;
     }
 
@@ -620,11 +613,10 @@ g_mount_source_ask_question_async (GMountSource       *source,
 			       &choices, n_choices,
 			       0);
 
-  result = g_simple_async_result_new (G_OBJECT (source), callback, user_data, 
-                                      g_mount_source_ask_question_async);
+  task = g_task_new (source, cancellable, callback, user_data);
   /* 30 minute timeout */
   _g_dbus_connection_call_async (NULL, message, 1000 * 60 * 30,
-				 ask_question_reply, result);
+				 ask_question_reply, task);
   dbus_message_unref (message);
 	
 }
@@ -636,14 +628,14 @@ g_mount_source_ask_question_finish (GMountSource *source,
 				    gint         *choice_out)
 {
   AskQuestionData *data, def= { FALSE, };
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  simple = G_SIMPLE_ASYNC_RESULT (result);
+  task = G_TASK (result);
 
-  if (g_simple_async_result_propagate_error (simple, NULL))
+  if (g_task_had_error (task))
     data = &def;
   else
-    data = (AskQuestionData *) g_simple_async_result_get_op_res_gpointer (simple);
+    data = (AskQuestionData *) g_task_propaget_pointer (task, NULL);
 
   if (aborted)
     *aborted = data->aborted;
@@ -651,7 +643,13 @@ g_mount_source_ask_question_finish (GMountSource *source,
   if (choice_out)
     *choice_out = data->choice;
 
-  return data != &def;	
+  if (data == &def)
+    return FALSE;
+  else
+    {
+      g_free (data);
+      return TRUE;
+    }
 }
 
 static void
@@ -718,17 +716,16 @@ show_processes_reply (DBusMessage *reply,
                       GError      *error,
                       gpointer     _data)
 {
-  GSimpleAsyncResult *result;
+  GTask *task;
   ShowProcessesData *data;
   dbus_bool_t handled, aborted;
   guint32 choice;
   DBusMessageIter iter;
 
-  result = G_SIMPLE_ASYNC_RESULT (_data);
+  task = G_TASK (_data);
   handled = TRUE;
 
   data = g_new0 (ShowProcessesData, 1);
-  g_simple_async_result_set_op_res_gpointer (result, data, g_free);
 
   if (reply == NULL)
     {
@@ -750,13 +747,15 @@ show_processes_reply (DBusMessage *reply,
 	}
     }
 
-  if (handled == FALSE)
+  if (handled == TRUE)
+    g_task_return_pointer (task, data, g_free);
+  else
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED, "Internal Error");
+      g_free (data);
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "Internal Error");
     }
 
-  g_simple_async_result_complete (result);
-  g_object_unref (result);
+  g_object_unref (task);
 }
 
 void
@@ -768,22 +767,19 @@ g_mount_source_show_processes_async (GMountSource        *source,
                                      GAsyncReadyCallback  callback,
                                      gpointer             user_data)
 {
-  GSimpleAsyncResult *result;
+  GTask *task;
   DBusMessage *message;
 
   /* If no dbus id specified, reply that we weren't handled */
   if (source->dbus_id[0] == 0)
     {
-      g_simple_async_report_error_in_idle (G_OBJECT (source),
-					   callback,
-					   user_data,
-					   G_IO_ERROR, G_IO_ERROR_FAILED,
-					   "Internal Error");
+      g_task_report_new_error (source, callback, user_data,
+			       G_IO_ERROR, G_IO_ERROR_FAILED,
+			       "Internal Error");
       return;
     }
 
-  result = g_simple_async_result_new (G_OBJECT (source), callback, user_data,
-                                      g_mount_source_show_processes_async);
+  task = g_task_new (source, cancellable, callback, user_data);
 
   if (message_string == NULL)
     message_string = "";
@@ -803,7 +799,7 @@ g_mount_source_show_processes_async (GMountSource        *source,
 
   /* 30 minute timeout */
   _g_dbus_connection_call_async (NULL, message, 1000 * 60 * 30,
-				 show_processes_reply, result);
+				 show_processes_reply, task);
   dbus_message_unref (message);
 }
 
@@ -814,14 +810,14 @@ g_mount_source_show_processes_finish (GMountSource *source,
                                       gint         *choice_out)
 {
   ShowProcessesData *data, def= { FALSE, };
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  simple = G_SIMPLE_ASYNC_RESULT (result);
+  task = G_TASK (result);
 
-  if (g_simple_async_result_propagate_error (simple, NULL))
+  if (g_task_had_error (task, NULL))
     data = &def;
   else
-    data = (ShowProcessesData *) g_simple_async_result_get_op_res_gpointer (simple);
+    data = (ShowProcessesData *) g_task_propagate_pointer (task);
 
   if (aborted)
     *aborted = data->aborted;
@@ -829,7 +825,13 @@ g_mount_source_show_processes_finish (GMountSource *source,
   if (choice_out)
     *choice_out = data->choice;
 
-  return data != &def;
+  if (data != &def)
+    return FALSE;
+  else
+    {
+      g_free (data);
+      return TRUE;
+    }
 }
 
 gboolean

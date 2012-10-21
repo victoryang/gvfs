@@ -788,7 +788,7 @@ static void
 complete_unmount_with_op (UnmountWithOpData *data)
 {
   gboolean ret;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_source_remove (data->timeout_id);
 
@@ -806,13 +806,13 @@ complete_unmount_with_op (UnmountWithOpData *data)
         }
     }
 
-  simple = g_simple_async_result_new (G_OBJECT (data->backend),
+  task = g_task_new (data->backend,
                                       data->callback,
                                       data->user_data,
                                       NULL);
-  g_simple_async_result_set_op_res_gboolean (simple, ret);
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_return_boolean (task, ret);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static void
@@ -891,15 +891,15 @@ g_vfs_backend_unmount_with_operation_finish (GVfsBackend *backend,
                                              GAsyncResult *res)
 {
   gboolean ret;
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
+  GTask *task = G_TASK (res);
 
-  if (g_simple_async_result_propagate_error (simple, NULL))
+  if (g_task_async_result_propagate_error (task, NULL))
     {
       ret = FALSE;
     }
   else
     {
-      ret = g_simple_async_result_get_op_res_gboolean (simple);
+      ret = g_task_propagate_boolean (task, error);
     }
 
   return ret;
@@ -942,14 +942,14 @@ g_vfs_backend_unmount_with_operation (GVfsBackend        *backend,
   /* if no processes are blocking, complete immediately */
   if (processes->len == 0)
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new (G_OBJECT (backend),
+      GTask *task;
+      task = g_task_new (backend,
                                           callback,
                                           user_data,
                                           NULL);
-      g_simple_async_result_set_op_res_gboolean (simple, TRUE);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_return_boolean (task, TRUE);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       goto out;
     }
 

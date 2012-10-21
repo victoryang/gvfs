@@ -112,7 +112,7 @@ gvfs_udisks2_utils_lookup_fstab_options_value (const gchar *fstab_options,
 
 typedef struct
 {
-  GSimpleAsyncResult *simple; /* borrowed reference */
+  GTask *task; /* borrowed reference */
   GMainContext *main_context; /* may be NULL */
 
   gchar *command_line;
@@ -259,9 +259,9 @@ on_cancelled (GCancellable *cancellable,
 
   error = NULL;
   g_warn_if_fail (g_cancellable_set_error_if_cancelled (cancellable, &error));
-  g_simple_async_result_take_error (data->simple, error);
-  g_simple_async_result_complete_in_idle (data->simple);
-  g_object_unref (data->simple);
+  g_task_async_result_take_error (data->task, error);
+  g_task_async_result_complete_in_idle (data->task);
+  g_object_unref (data->task);
 }
 
 static gboolean
@@ -319,8 +319,8 @@ child_watch_cb (GPid     pid,
   data->child_watch_source = NULL;
 
   /* we're done */
-  g_simple_async_result_complete_in_idle (data->simple);
-  g_object_unref (data->simple);
+  g_task_async_result_complete_in_idle (data->task);
+  g_object_unref (data->task);
 }
 
 static gboolean
@@ -334,8 +334,8 @@ timeout_cb (gpointer user_data)
   data->timeout_source = NULL;
 
   /* we're done */
-  g_simple_async_result_complete_in_idle (data->simple);
-  g_object_unref (data->simple);
+  g_task_async_result_complete_in_idle (data->task);
+  g_object_unref (data->task);
 
   return FALSE; /* remove source */
 }
@@ -355,7 +355,7 @@ gvfs_udisks2_utils_spawn (guint                timeout_seconds,
   gchar **child_argv = NULL;
 
   data = g_slice_new0 (SpawnData);
-  data->simple = g_simple_async_result_new (NULL,
+  data->task = g_task_new (NULL,
                                             callback,
                                             user_data,
                                             gvfs_udisks2_utils_spawn);
@@ -374,8 +374,8 @@ gvfs_udisks2_utils_spawn (guint                timeout_seconds,
   data->child_stdout_fd = -1;
   data->child_stderr_fd = -1;
 
-  /* the life-cycle of SpawnData is tied to its GSimpleAsyncResult */
-  g_simple_async_result_set_op_res_gpointer (data->simple, data, (GDestroyNotify) spawn_data_free);
+  /* the life-cycle of SpawnData is tied to its GTask */
+  g_task_return_pointer (data->task, data, (GDestroyNotify) spawn_data_free);
 
   error = NULL;
   if (data->cancellable != NULL)
@@ -384,9 +384,9 @@ gvfs_udisks2_utils_spawn (guint                timeout_seconds,
       error = NULL;
       if (g_cancellable_set_error_if_cancelled (data->cancellable, &error))
         {
-          g_simple_async_result_take_error (data->simple, error);
-          g_simple_async_result_complete_in_idle (data->simple);
-          g_object_unref (data->simple);
+          g_task_async_result_take_error (data->task, error);
+          g_task_async_result_complete_in_idle (data->task);
+          g_object_unref (data->task);
           goto out;
         }
 
@@ -405,9 +405,9 @@ gvfs_udisks2_utils_spawn (guint                timeout_seconds,
       g_prefix_error (&error,
                       "Error parsing command-line `%s': ",
                       data->command_line);
-      g_simple_async_result_take_error (data->simple, error);
-      g_simple_async_result_complete_in_idle (data->simple);
-      g_object_unref (data->simple);
+      g_task_async_result_take_error (data->task, error);
+      g_task_async_result_complete_in_idle (data->task);
+      g_object_unref (data->task);
       goto out;
     }
 
@@ -427,9 +427,9 @@ gvfs_udisks2_utils_spawn (guint                timeout_seconds,
       g_prefix_error (&error,
                       "Error spawning command-line `%s': ",
                       data->command_line);
-      g_simple_async_result_take_error (data->simple, error);
-      g_simple_async_result_complete_in_idle (data->simple);
-      g_object_unref (data->simple);
+      g_task_async_result_take_error (data->task, error);
+      g_task_async_result_complete_in_idle (data->task);
+      g_object_unref (data->task);
       goto out;
     }
 
@@ -472,19 +472,19 @@ gvfs_udisks2_utils_spawn_finish (GAsyncResult   *res,
                                  gchar         **out_standard_error,
                                  GError        **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
+  GTask *task = G_TASK (res);
   SpawnData *data;
   gboolean ret = FALSE;
 
   g_return_val_if_fail (G_IS_ASYNC_RESULT (res), FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  g_warn_if_fail (g_simple_async_result_get_source_tag (simple) == gvfs_udisks2_utils_spawn);
+  g_warn_if_fail (g_task_async_result_get_source_tag (task) == gvfs_udisks2_utils_spawn);
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     goto out;
 
-  data = g_simple_async_result_get_op_res_gpointer (simple);
+  data = g_task_propagate_pointer (task, error);
 
   if (data->timed_out)
     {

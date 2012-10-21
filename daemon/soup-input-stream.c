@@ -57,7 +57,7 @@ typedef struct {
   guchar *caller_buffer;
   gsize caller_bufsize, caller_nread;
   GAsyncReadyCallback outstanding_callback;
-  GSimpleAsyncResult *result;
+  GTask *result;
 
 } SoupInputStreamPrivate;
 #define SOUP_INPUT_STREAM_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), SOUP_TYPE_INPUT_STREAM, SoupInputStreamPrivate))
@@ -532,7 +532,7 @@ wrapper_callback (GObject *source_object, GAsyncResult *res,
 }
 
 static void
-send_async_thread (GSimpleAsyncResult *res,
+send_async_thread (GTask *res,
 		   GObject *object,
 		   GCancellable *cancellable)
 {
@@ -541,10 +541,10 @@ send_async_thread (GSimpleAsyncResult *res,
 
   success = soup_input_stream_send_internal (G_INPUT_STREAM (object),
 					     cancellable, &error);
-  g_simple_async_result_set_op_res_gboolean (res, success);
+  g_task_return_boolean (res, success);
   if (error)
     {
-      g_simple_async_result_set_from_error (res, error);
+      g_task_return_error (res, error);
       g_error_free (error);
     }
 }
@@ -556,11 +556,11 @@ soup_input_stream_send_async_in_thread (GInputStream        *stream,
 					GAsyncReadyCallback  callback,
 					gpointer             user_data)
 {
-  GSimpleAsyncResult *res;
+  GTask *res;
 
-  res = g_simple_async_result_new (G_OBJECT (stream), callback, user_data,
+  res = g_task_new (stream, callback, user_data,
 				   soup_input_stream_send_async_in_thread);
-  g_simple_async_result_run_in_thread (res, send_async_thread,
+  g_task_run_in_thread (res, send_async_thread,
 				       io_priority, cancellable);
   g_object_unref (res);
 }
@@ -569,7 +569,7 @@ static void
 send_async_finished (GInputStream *stream)
 {
   SoupInputStreamPrivate *priv = SOUP_INPUT_STREAM_GET_PRIVATE (stream);
-  GSimpleAsyncResult *result;
+  GTask *result;
   GError *error = NULL;
 
   if (!g_cancellable_set_error_if_cancelled (priv->cancellable, &error))
@@ -582,13 +582,13 @@ send_async_finished (GInputStream *stream)
   result = priv->result;
   priv->result = NULL;
 
-  g_simple_async_result_set_op_res_gboolean (result, error == NULL);
+  g_task_return_boolean (result, error == NULL);
   if (error)
     {
-      g_simple_async_result_set_from_error (result, error);
+      g_task_return_error (result, error);
       g_error_free (error);
     }
-  g_simple_async_result_complete (result);
+  g_task_async_result_complete (result);
   g_object_unref (result);
 }
 
@@ -619,7 +619,7 @@ soup_input_stream_send_async_internal (GInputStream        *stream,
   priv->finished_cb = send_async_finished;
 
   soup_input_stream_prepare_for_io (stream, cancellable, NULL, 0);
-  priv->result = g_simple_async_result_new (G_OBJECT (stream),
+  priv->result = g_task_new (stream,
 					    wrapper_callback, user_data,
 					    soup_input_stream_send_async);
 }
@@ -650,7 +650,7 @@ soup_input_stream_send_async (GInputStream        *stream,
 
   if (!g_input_stream_set_pending (stream, &error))
     {
-      g_simple_async_report_gerror_in_idle (G_OBJECT (stream),
+      g_task_async_report_gerror_in_idle (G_OBJECT (stream),
 					    callback,
 					    user_data,
 					    error);
@@ -678,24 +678,24 @@ soup_input_stream_send_finish (GInputStream  *stream,
 			       GAsyncResult  *result,
 			       GError       **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_val_if_fail (G_IS_SIMPLE_ASYNC_RESULT (result), FALSE);
-  simple = G_SIMPLE_ASYNC_RESULT (result);
+  task = G_TASK (result);
 
-  g_return_val_if_fail (g_simple_async_result_get_source_tag (simple) == soup_input_stream_send_async, FALSE);
+  g_return_val_if_fail (g_task_async_result_get_source_tag (task) == soup_input_stream_send_async, FALSE);
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
-  return g_simple_async_result_get_op_res_gboolean (simple);
+  return g_task_propagate_boolean (task, error);
 }
 
 static void
 read_async_done (GInputStream *stream)
 {
   SoupInputStreamPrivate *priv = SOUP_INPUT_STREAM_GET_PRIVATE (stream);
-  GSimpleAsyncResult *result;
+  GTask *result;
   GError *error = NULL;
 
   result = priv->result;
@@ -704,18 +704,18 @@ read_async_done (GInputStream *stream)
   if (g_cancellable_set_error_if_cancelled (priv->cancellable, &error) ||
       set_error_if_http_failed (priv->msg, &error))
     {
-      g_simple_async_result_set_from_error (result, error);
+      g_task_return_error (result, error);
       g_error_free (error);
     }
   else
-    g_simple_async_result_set_op_res_gssize (result, priv->caller_nread);
+    g_task_return_int (result, priv->caller_nread);
 
   priv->got_chunk_cb = NULL;
   priv->finished_cb = NULL;
   priv->cancelled_cb = NULL;
   soup_input_stream_done_io (stream);
 
-  g_simple_async_result_complete (result);
+  g_task_async_result_complete (result);
   g_object_unref (result);
 }
 
@@ -729,7 +729,7 @@ soup_input_stream_read_async (GInputStream        *stream,
 			      gpointer             user_data)
 {
   SoupInputStreamPrivate *priv = SOUP_INPUT_STREAM_GET_PRIVATE (stream);
-  GSimpleAsyncResult *result;
+  GTask *result;
 
   /* If the session uses the default GMainContext, then we can do
    * async I/O directly. But if it has its own main context, we fall
@@ -743,14 +743,14 @@ soup_input_stream_read_async (GInputStream        *stream,
       return;
     }
 
-  result = g_simple_async_result_new (G_OBJECT (stream),
+  result = g_task_new (stream,
 				      callback, user_data,
 				      soup_input_stream_read_async);
 
   if (priv->finished)
     {
-      g_simple_async_result_set_op_res_gssize (result, 0);
-      g_simple_async_result_complete_in_idle (result);
+      g_task_return_int (result, 0);
+      g_task_async_result_complete_in_idle (result);
       g_object_unref (result);
       return;
     }
@@ -758,8 +758,8 @@ soup_input_stream_read_async (GInputStream        *stream,
   if (priv->leftover_bufsize)
     {
       gsize nread = read_from_leftover (priv, buffer, count);
-      g_simple_async_result_set_op_res_gssize (result, nread);
-      g_simple_async_result_complete_in_idle (result);
+      g_task_return_int (result, nread);
+      g_task_async_result_complete_in_idle (result);
       g_object_unref (result);
       return;
     }
@@ -777,13 +777,13 @@ soup_input_stream_read_finish (GInputStream  *stream,
 			       GAsyncResult  *result,
 			       GError       **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_val_if_fail (G_IS_SIMPLE_ASYNC_RESULT (result), -1);
-  simple = G_SIMPLE_ASYNC_RESULT (result);
-  g_return_val_if_fail (g_simple_async_result_get_source_tag (simple) == soup_input_stream_read_async, -1);
+  task = G_TASK (result);
+  g_return_val_if_fail (g_task_async_result_get_source_tag (task) == soup_input_stream_read_async, -1);
 
-  return g_simple_async_result_get_op_res_gssize (simple);
+  return g_task_propagate_ssize (task, error);
 }
 
 static void
@@ -793,22 +793,22 @@ soup_input_stream_close_async (GInputStream       *stream,
 			       GAsyncReadyCallback callback,
 			       gpointer            user_data)
 {
-  GSimpleAsyncResult *result;
+  GTask *result;
   gboolean success;
   GError *error = NULL;
 
-  result = g_simple_async_result_new (G_OBJECT (stream),
+  result = g_task_new (stream,
 				      callback, user_data,
 				      soup_input_stream_close_async);
   success = soup_input_stream_close (stream, cancellable, &error);
-  g_simple_async_result_set_op_res_gboolean (result, success);
+  g_task_return_boolean (result, success);
   if (error)
     {
-      g_simple_async_result_set_from_error (result, error);
+      g_task_return_error (result, error);
       g_error_free (error);
     }
 
-  g_simple_async_result_complete_in_idle (result);
+  g_task_async_result_complete_in_idle (result);
   g_object_unref (result);
 }
 

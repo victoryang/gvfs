@@ -1132,7 +1132,7 @@ static void
 get_volumes_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *afp_conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -1144,7 +1144,7 @@ get_volumes_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (afp_conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -1153,7 +1153,7 @@ get_volumes_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   {
     g_object_unref (reply);
 
-    g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+    g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
     goto done;
   }
   
@@ -1185,11 +1185,11 @@ get_volumes_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   }
   g_object_unref (reply);
 
-  g_simple_async_result_set_op_res_gpointer (simple, volumes,
+  g_task_return_pointer (task, volumes,
                                              (GDestroyNotify)g_ptr_array_unref);
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -1209,18 +1209,18 @@ g_vfs_afp_server_get_volumes (GVfsAfpServer       *server,
                               gpointer             user_data)
 {
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
   /* Get Server Parameters */
   comm = g_vfs_afp_command_new (AFP_COMMAND_GET_SRVR_PARMS);
   /* pad byte */
   g_vfs_afp_command_put_byte (comm, 0);
 
-  simple = g_simple_async_result_new (G_OBJECT (server), callback, user_data,
+  task = g_task_new (server, callback, user_data,
                                       g_vfs_afp_server_get_volumes);
   
   g_vfs_afp_connection_send_command (server->conn, comm, NULL, get_volumes_cb,
-                                     cancellable, simple);
+                                     cancellable, task);
 }
 
 /*
@@ -1242,19 +1242,19 @@ g_vfs_afp_server_get_volumes_finish (GVfsAfpServer  *server,
                                      GAsyncResult   *result,
                                      GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (server),
                                                         g_vfs_afp_server_get_volumes),
                         NULL);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return NULL;
 
-  return g_ptr_array_ref ((GPtrArray *)g_simple_async_result_get_op_res_gpointer (simple));
+  return g_ptr_array_ref ((GPtrArray *)g_task_propagate_pointer (task, error));
 }
 
 GVfsAfpVolume *

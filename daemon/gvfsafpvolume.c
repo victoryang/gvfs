@@ -173,9 +173,9 @@ static void
 get_vol_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *connection = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
   
-  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (simple)));
+  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (task)));
   GVfsAfpVolumePrivate *priv = volume->priv;
 
   GVfsAfpReply *reply;
@@ -188,7 +188,7 @@ get_vol_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (connection, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -197,7 +197,7 @@ get_vol_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   {
     g_object_unref (reply);
 
-    g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+    g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
     goto done;
   }
 
@@ -259,11 +259,11 @@ get_vol_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 
   g_object_unref (reply);
   
-  g_simple_async_result_set_op_res_gpointer (simple, info, g_object_unref);
+  g_task_return_pointer (task, info, g_object_unref);
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -286,7 +286,7 @@ g_vfs_afp_volume_get_parms (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   priv = volume->priv;
   
@@ -298,12 +298,12 @@ g_vfs_afp_volume_get_parms (GVfsAfpVolume       *volume,
   /* Volume Bitmap */
   g_vfs_afp_command_put_uint16 (comm, vol_bitmap);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_get_parms);
                                       
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL, get_vol_parms_cb,
-                                     cancellable, simple);
+                                     cancellable, task);
   g_object_unref (comm);
 }
 
@@ -325,19 +325,19 @@ g_vfs_afp_volume_get_parms_finish (GVfsAfpVolume  *volume,
                                    GAsyncResult   *result,
                                    GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_get_parms),
                         NULL);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return NULL;
 
-  return g_object_ref (g_simple_async_result_get_op_res_gpointer (simple));
+  return g_object_ref (g_task_propagate_pointer (task, error));
 }
 
 typedef struct
@@ -358,7 +358,7 @@ static void
 open_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
   
   GVfsAfpVolume *volume;
   GVfsAfpVolumePrivate *priv;
@@ -369,13 +369,13 @@ open_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   OpenForkData *data;
   guint16 file_bitmap;
 
-  volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (simple)));
+  volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (task)));
   priv = volume->priv;
   
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -387,23 +387,23 @@ open_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("File doesn't exist"));
         break;
       case AFP_RESULT_OBJECT_TYPE_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
                                          _("File is directory"));
         break;
       case AFP_RESULT_TOO_MANY_FILES_OPEN:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_TOO_MANY_OPEN_FILES,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_TOO_MANY_OPEN_FILES,
                                          _("Too many files open"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
@@ -418,12 +418,12 @@ open_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   g_vfs_afp_server_fill_info (priv->server, data->info, reply, FALSE, file_bitmap);
   g_object_unref (reply);
 
-  g_simple_async_result_set_op_res_gpointer (simple, data,
+  g_task_return_pointer (task, data,
                                              (GDestroyNotify)open_fork_data_free);
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -451,7 +451,7 @@ g_vfs_afp_volume_open_fork (GVfsAfpVolume      *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -459,7 +459,7 @@ g_vfs_afp_volume_open_fork (GVfsAfpVolume      *volume,
   
   if (is_root (filename))
   {
-    g_simple_async_report_error_in_idle (G_OBJECT (volume), callback,
+    g_task_async_report_error_in_idle (G_OBJECT (volume), callback,
                                          user_data, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
                                          _("File is directory"));
     return;
@@ -483,11 +483,11 @@ g_vfs_afp_volume_open_fork (GVfsAfpVolume      *volume,
   /* Pathname */
   g_vfs_afp_command_put_pathname (comm, filename);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_open_fork);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     open_fork_cb, cancellable, simple);
+                                     open_fork_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -512,20 +512,20 @@ g_vfs_afp_volume_open_fork_finish (GVfsAfpVolume  *volume,
                                    GFileInfo      **info,
                                    GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   OpenForkData *data;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (res,
+  g_return_val_if_fail (g_task_async_result_is_valid (res,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_open_fork),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
-  data = g_simple_async_result_get_op_res_gpointer (simple);
+  data = g_task_propagate_pointer (task, error);
   if (fork_refnum)
     *fork_refnum = data->fork_refnum;
   if (info)
@@ -538,7 +538,7 @@ static void
 close_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -547,7 +547,7 @@ close_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -555,11 +555,11 @@ close_fork_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   g_object_unref (reply);
   
   if (res_code != AFP_RESULT_NO_ERROR)
-    g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+    g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -582,7 +582,7 @@ g_vfs_afp_volume_close_fork (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -595,11 +595,11 @@ g_vfs_afp_volume_close_fork (GVfsAfpVolume       *volume,
   /* OForkRefNum */
   g_vfs_afp_command_put_int16 (comm, fork_refnum);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_close_fork);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     close_fork_cb, cancellable, simple);
+                                     close_fork_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -620,16 +620,16 @@ g_vfs_afp_volume_close_fork_finish (GVfsAfpVolume  *volume,
                                     GAsyncResult   *result,
                                     GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_close_fork),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -639,7 +639,7 @@ static void
 delete_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -648,7 +648,7 @@ delete_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -660,38 +660,38 @@ delete_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Permission denied"));
         break;
       case AFP_RESULT_FILE_BUSY:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_BUSY,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_BUSY,
                                          _("Target file is open"));
         break;                           
       case AFP_RESULT_DIR_NOT_EMPTY:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_EMPTY,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_EMPTY,
                                   _("Directory not empty"));
         break;
       case AFP_RESULT_OBJECT_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                   _("Target object is marked as not deletable (DeleteInhibit)"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                   _("Target object doesn't exist"));
         break;
       case AFP_RESULT_VOL_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Volume is read-only"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -714,7 +714,7 @@ g_vfs_afp_volume_delete (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -731,11 +731,11 @@ g_vfs_afp_volume_delete (GVfsAfpVolume       *volume,
   /* Pathname */
   g_vfs_afp_command_put_pathname (comm, filename);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_delete);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     delete_cb, cancellable, simple);
+                                     delete_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -756,16 +756,16 @@ g_vfs_afp_volume_delete_finish (GVfsAfpVolume  *volume,
                                 GAsyncResult   *result,
                                 GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_delete),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -792,7 +792,7 @@ static void
 create_file_cb (GObject *object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -802,7 +802,7 @@ create_file_cb (GObject *object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -813,38 +813,38 @@ create_file_cb (GObject *object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Permission denied"));
         break;
       case AFP_RESULT_DISK_FULL:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
                                   _("Not enough space on volume"));
         break;
       case AFP_RESULT_FILE_BUSY:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_EXISTS,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_EXISTS,
                                   _("Target file is open"));
         break;
       case AFP_RESULT_OBJECT_EXISTS:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_EXISTS,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_EXISTS,
                                   _("Target file already exists"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                   _("Ancestor directory doesn't exist"));
         break;
       case AFP_RESULT_VOL_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Volume is read-only"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static void
@@ -852,9 +852,9 @@ create_file_get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpo
 {
   GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (source_object);
   GVfsAfpVolumePrivate *priv = volume->priv;
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
-  CreateFileData *cfd = g_simple_async_result_get_op_res_gpointer (simple);
+  CreateFileData *cfd = g_task_propagate_pointer (task, error);
   
   GFileInfo *info;
   GError *err = NULL;
@@ -866,9 +866,9 @@ create_file_get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpo
   info = g_vfs_afp_volume_get_filedir_parms_finish (volume, res, &err);
   if (!info)
   {
-    g_simple_async_result_take_error (simple, err);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    g_task_async_result_take_error (task, err);
+    g_task_async_result_complete (task);
+    g_object_unref (task);
     return;
   }
 
@@ -889,7 +889,7 @@ create_file_get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpo
   g_free (basename);
 
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     create_file_cb, cfd->cancellable, simple);
+                                     create_file_cb, cfd->cancellable, task);
   g_object_unref (comm);
 }
 
@@ -915,7 +915,7 @@ g_vfs_afp_volume_create_file (GVfsAfpVolume      *volume,
                               gpointer            user_data)
 {
   CreateFileData *cfd;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   char *dirname;
 
   cfd = g_slice_new0 (CreateFileData);
@@ -924,14 +924,14 @@ g_vfs_afp_volume_create_file (GVfsAfpVolume      *volume,
   if (cancellable)
     cfd->cancellable = g_object_ref (cancellable);
   
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_create_file);
-  g_simple_async_result_set_op_res_gpointer (simple, cfd,
+  g_task_return_pointer (task, cfd,
                                              (GDestroyNotify)create_file_data_free);
 
   dirname = g_path_get_dirname (filename);
   g_vfs_afp_volume_get_filedir_parms (volume, dirname, 0, AFP_DIR_BITMAP_NODE_ID_BIT,
-                                      cancellable, create_file_get_filedir_parms_cb, simple);
+                                      cancellable, create_file_get_filedir_parms_cb, task);
   g_free (dirname);
 }
 
@@ -952,16 +952,16 @@ g_vfs_afp_volume_create_file_finish (GVfsAfpVolume  *volume,
                                      GAsyncResult   *result,
                                      GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_create_file),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -986,7 +986,7 @@ static void
 make_directory_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -995,7 +995,7 @@ make_directory_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -1007,47 +1007,47 @@ make_directory_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Permission denied"));
         break;
       case AFP_RESULT_DISK_FULL:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
                                   _("Not enough space on volume"));
         break;
       case AFP_RESULT_FLAT_VOL:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
                                   _("Volume is flat and doesn't support directories"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                   _("Ancestor directory doesn't exist"));
         break;
       case AFP_RESULT_OBJECT_EXISTS:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_EXISTS,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_EXISTS,
                                   _("Target directory already exists"));
         break;
       case AFP_RESULT_VOL_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Volume is read-only"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static void
 create_directory_get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
-  CreateDirData *cdd = g_simple_async_result_get_op_res_gpointer (simple);
+  GTask *task = G_TASK (user_data);
+  CreateDirData *cdd = g_task_propagate_pointer (task, error);
 
   GFileInfo *info = NULL;
   GError *err = NULL;
@@ -1077,15 +1077,15 @@ create_directory_get_filedir_parms_cb (GObject *source_object, GAsyncResult *res
   g_vfs_afp_command_put_pathname (comm, cdd->basename);
   
   g_vfs_afp_connection_send_command (volume->priv->server->conn, comm, NULL,
-                                     make_directory_cb, cdd->cancellable, simple);
+                                     make_directory_cb, cdd->cancellable, task);
   g_object_unref (comm);
   return;
 
 error:
   g_clear_object (info);
-  g_simple_async_result_take_error (simple, err);
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_take_error (task, err);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -1108,20 +1108,20 @@ g_vfs_afp_volume_create_directory (GVfsAfpVolume      *volume,
                                    GAsyncReadyCallback callback,
                                    gpointer            user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   CreateDirData *cdd;
   char *dirname;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_create_directory);
 
   cdd = g_slice_new (CreateDirData);
   cdd->basename = g_path_get_basename (directory);
   cdd->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
   
-  g_simple_async_result_set_op_res_gpointer (simple, cdd,
+  g_task_return_pointer (task, cdd,
                                              (GDestroyNotify)create_dir_data_free);
 
   dirname = g_path_get_dirname (directory);
@@ -1129,7 +1129,7 @@ g_vfs_afp_volume_create_directory (GVfsAfpVolume      *volume,
                                       AFP_DIR_BITMAP_NODE_ID_BIT,
                                       cancellable,
                                       create_directory_get_filedir_parms_cb,
-                                      simple);
+                                      task);
   g_free (dirname);
 }
 
@@ -1150,16 +1150,16 @@ g_vfs_afp_volume_create_directory_finish (GVfsAfpVolume  *volume,
                                           GAsyncResult   *result,
                                           GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_create_directory),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -1186,7 +1186,7 @@ static void
 rename_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -1195,7 +1195,7 @@ rename_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -1207,39 +1207,39 @@ rename_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_CANT_RENAME:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_INVALID_FILENAME,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_INVALID_FILENAME,
                                   _("Can't rename volume"));
         break;
       case AFP_RESULT_OBJECT_EXISTS:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_EXISTS,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_EXISTS,
                                   _("Object with that name already exists"));
         break;
       case AFP_RESULT_OBJECT_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                   _("Target object is marked as not renameable (RenameInhibit)"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                   _("Target object doesn't exist"));
         break;
       case AFP_RESULT_VOL_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                   _("Volume is read-only"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static void
@@ -1248,8 +1248,8 @@ rename_get_filedir_parms_cb (GObject      *source_object,
                              gpointer      user_data)
 {
   GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
-  RenameData *rd = g_simple_async_result_get_op_res_gpointer (simple);
+  GTask *task = G_TASK (user_data);
+  RenameData *rd = g_task_propagate_pointer (task, error);
 
   GFileInfo *info;
   GError *err = NULL;
@@ -1261,9 +1261,9 @@ rename_get_filedir_parms_cb (GObject      *source_object,
   info = g_vfs_afp_volume_get_filedir_parms_finish (volume, res, &err);
   if (!info)
   {
-    g_simple_async_result_take_error (simple, err);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    g_task_async_result_take_error (task, err);
+    g_task_async_result_complete (task);
+    g_object_unref (task);
     return;
   }
 
@@ -1287,7 +1287,7 @@ rename_get_filedir_parms_cb (GObject      *source_object,
   g_vfs_afp_command_put_pathname (comm, rd->new_name);
 
   g_vfs_afp_connection_send_command (volume->priv->server->conn, comm, NULL,
-                                     rename_cb, rd->cancellable, simple);
+                                     rename_cb, rd->cancellable, task);
   g_object_unref (comm);
 }
 
@@ -1311,26 +1311,26 @@ g_vfs_afp_volume_rename (GVfsAfpVolume      *volume,
                          GAsyncReadyCallback callback,
                          gpointer            user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   RenameData *rd;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_rename);
 
   rd = g_slice_new (RenameData);
   rd->filename = g_strdup (filename);
   rd->new_name = g_strdup (new_name);
   rd->cancellable = g_object_ref (cancellable);
-  g_simple_async_result_set_op_res_gpointer (simple, rd,
+  g_task_return_pointer (task, rd,
                                              (GDestroyNotify)rename_data_free);
   
   g_vfs_afp_volume_get_filedir_parms (volume, filename,
                                       AFP_FILEDIR_BITMAP_PARENT_DIR_ID_BIT,
                                       AFP_FILEDIR_BITMAP_PARENT_DIR_ID_BIT,
                                       cancellable, rename_get_filedir_parms_cb,
-                                      simple);
+                                      task);
 }
 
 /*
@@ -1350,15 +1350,15 @@ g_vfs_afp_volume_rename_finish (GVfsAfpVolume  *volume,
                                 GAsyncResult   *res,
                                 GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_rename),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -1368,7 +1368,7 @@ static void
 move_and_rename_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -1378,7 +1378,7 @@ move_and_rename_cb (GObject *source_object, GAsyncResult *res, gpointer user_dat
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -1390,42 +1390,42 @@ move_and_rename_cb (GObject *source_object, GAsyncResult *res, gpointer user_dat
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_CANT_MOVE:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE,
                                          _("Can't move directory into one of its descendants"));
         break;
       case AFP_RESULT_INSIDE_SHARE_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("Can't move sharepoint into a shared directory"));
         break;
       case AFP_RESULT_INSIDE_TRASH_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("Can't move a shared directory into the Trash"));
         break;
       case AFP_RESULT_OBJECT_EXISTS:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_EXISTS,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_EXISTS,
                                          _("Target file already exists"));
         break;
       case AFP_RESULT_OBJECT_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("Object being moved is marked as not renameable (RenameInhibit)"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("Object being moved doesn't exist"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -1451,7 +1451,7 @@ g_vfs_afp_volume_move_and_rename (GVfsAfpVolume      *volume,
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
   char *dirname, *basename;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -1482,11 +1482,11 @@ g_vfs_afp_volume_move_and_rename (GVfsAfpVolume      *volume,
   g_vfs_afp_command_put_pathname (comm, basename);
   g_free (basename);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_move_and_rename);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     move_and_rename_cb, cancellable, simple);
+                                     move_and_rename_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -1507,15 +1507,15 @@ g_vfs_afp_volume_move_and_rename_finish (GVfsAfpVolume  *volume,
                                          GAsyncResult   *res,
                                          GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_move_and_rename),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -1525,7 +1525,7 @@ static void
 copy_file_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -1535,7 +1535,7 @@ copy_file_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -1547,42 +1547,42 @@ copy_file_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_CALL_NOT_SUPPORTED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
                                          _("Server doesn't support the FPCopyFile operation"));
         break;
       case AFP_RESULT_DENY_CONFLICT:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("Unable to open source file for reading"));
         break;
       case AFP_RESULT_DISK_FULL:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
                                          _("Not enough space on volume"));
         break;
       case AFP_RESULT_OBJECT_EXISTS:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_EXISTS,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_EXISTS,
                                          _("Target file already exists"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("Source file and/or destination directory doesn't exist"));
         break;
       case AFP_RESULT_OBJECT_TYPE_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
                                          _("Source file is a directory"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
   }
         
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -1609,7 +1609,7 @@ g_vfs_afp_volume_copy_file (GVfsAfpVolume      *volume,
   
   GVfsAfpCommand *comm;
   char *dirname, *basename;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -1642,11 +1642,11 @@ g_vfs_afp_volume_copy_file (GVfsAfpVolume      *volume,
   g_vfs_afp_command_put_pathname (comm, basename);
   g_free (basename);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_copy_file);
 
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     copy_file_cb, cancellable, simple);
+                                     copy_file_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -1667,15 +1667,15 @@ g_vfs_afp_volume_copy_file_finish (GVfsAfpVolume *volume,
                                    GAsyncResult  *res,
                                    GError       **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_copy_file),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -1699,7 +1699,7 @@ static void
 map_id_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -1710,8 +1710,8 @@ map_id_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
-    g_simple_async_result_complete (simple);
+    g_task_async_result_take_error (task, err);
+    g_task_async_result_complete (task);
     return;
   }
 
@@ -1721,19 +1721,19 @@ map_id_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ITEM_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("ID not found"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
 
-    g_simple_async_result_complete (simple);
+    g_task_async_result_complete (task);
     return;
   }
 
-  map_data = g_simple_async_result_get_op_res_gpointer (simple);
+  map_data = g_task_propagate_pointer (task, error);
   
   if (map_data->function == AFP_MAP_ID_FUNCTION_USER_UUID_TO_UTF8_NAME ||
       map_data->function == AFP_MAP_ID_FUNCTION_GROUP_UUID_TO_UTF8_NAME)
@@ -1758,7 +1758,7 @@ map_id_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     g_vfs_afp_name_unref (afp_name);
   }
 
-  g_simple_async_result_complete (simple);
+  g_task_async_result_complete (task);
 }
 
 /*
@@ -1783,7 +1783,7 @@ g_vfs_afp_volume_map_id (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   MapIDData *map_data;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
@@ -1802,16 +1802,16 @@ g_vfs_afp_volume_map_id (GVfsAfpVolume       *volume,
   else
     g_vfs_afp_command_put_int64 (comm, id);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_map_id);
 
   map_data = g_slice_new0 (MapIDData);
   map_data->function = map_function;
-  g_simple_async_result_set_op_res_gpointer (simple, map_data,
+  g_task_return_pointer (task, map_data,
                                              (GDestroyNotify)map_id_data_free);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     map_id_cb, cancellable, simple);
+                                     map_id_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -1836,19 +1836,19 @@ g_vfs_afp_volume_map_id_finish (GVfsAfpVolume   *volume,
                                 AfpMapIDFunction *map_function,
                                 GError          **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   MapIDData *map_data;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_map_id),
                         NULL);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return NULL;
 
-  map_data = g_simple_async_result_get_op_res_gpointer (simple);
+  map_data = g_task_propagate_pointer (task, error);
 
   if (map_function)
     *map_function = map_data->function;
@@ -1860,8 +1860,8 @@ static void
 get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
-  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (simple)));
+  GTask *task = G_TASK (user_data);
+  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (task)));
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -1875,7 +1875,7 @@ get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_d
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -1887,11 +1887,11 @@ get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_d
     switch (res_code)
     {
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("File doesn't exist"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
@@ -1912,11 +1912,11 @@ get_filedir_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_d
   
   g_object_unref (reply);
 
-  g_simple_async_result_set_op_res_gpointer (simple, info, g_object_unref);
+  g_task_return_pointer (task, info, g_object_unref);
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -1946,7 +1946,7 @@ g_vfs_afp_volume_get_filedir_parms (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -1966,13 +1966,13 @@ g_vfs_afp_volume_get_filedir_parms (GVfsAfpVolume       *volume,
   /* PathName */
   g_vfs_afp_command_put_pathname (comm, filename);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_get_filedir_parms);
                                       
 
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
                                      get_filedir_parms_cb, cancellable,
-                                     simple);
+                                     task);
   g_object_unref (comm);
 }
 
@@ -1994,27 +1994,27 @@ g_vfs_afp_volume_get_filedir_parms_finish (GVfsAfpVolume  *volume,
                                            GAsyncResult   *result,
                                            GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_get_filedir_parms),
                         NULL);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return NULL;
 
-  return g_object_ref (g_simple_async_result_get_op_res_gpointer (simple));
+  return g_object_ref (g_task_propagate_pointer (task, error));
 }
 
 static void
 get_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
-  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (simple)));
+  GTask *task = G_TASK (user_data);
+  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (task)));
   GVfsAfpVolumePrivate *priv = volume->priv;
 
   GVfsAfpReply *reply;
@@ -2027,7 +2027,7 @@ get_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -2036,7 +2036,7 @@ get_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
   {
     g_object_unref (reply);
 
-    g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+    g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
     goto done;
   }
 
@@ -2047,11 +2047,11 @@ get_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
 
   g_object_unref (reply);
 
-  g_simple_async_result_set_op_res_gpointer (simple, info, g_object_unref);
+  g_task_return_pointer (task, info, g_object_unref);
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -2077,7 +2077,7 @@ g_vfs_afp_volume_get_fork_parms (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -2091,13 +2091,13 @@ g_vfs_afp_volume_get_fork_parms (GVfsAfpVolume       *volume,
   /* Bitmap */  
   g_vfs_afp_command_put_uint16 (comm, file_bitmap);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_get_fork_parms);
                                       
 
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
                                      get_fork_parms_cb, cancellable,
-                                     simple);
+                                     task);
   g_object_unref (comm);
 }
 
@@ -2119,26 +2119,26 @@ g_vfs_afp_volume_get_fork_parms_finish (GVfsAfpVolume  *volume,
                                         GAsyncResult   *result,
                                         GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_get_fork_parms),
                         NULL);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return NULL;
 
-  return g_object_ref (g_simple_async_result_get_op_res_gpointer (simple));
+  return g_object_ref (g_task_propagate_pointer (task, error));
 }
 
 static void
 set_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -2147,7 +2147,7 @@ set_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -2158,27 +2158,27 @@ set_fork_parms_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_DISK_FULL:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
                                          _("Not enough space on volume"));
         break;
       case AFP_RESULT_LOCK_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("Range lock conflict exists"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -2203,7 +2203,7 @@ g_vfs_afp_volume_set_fork_size (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -2220,11 +2220,11 @@ g_vfs_afp_volume_set_fork_size (GVfsAfpVolume       *volume,
   /* ForkLen */
   g_vfs_afp_command_put_int64 (comm, size);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_set_fork_size);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     set_fork_parms_cb, cancellable, simple);
+                                     set_fork_parms_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -2245,16 +2245,16 @@ g_vfs_afp_volume_set_fork_size_finish (GVfsAfpVolume  *volume,
                                        GAsyncResult   *result,
                                        GError         **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
+  g_return_val_if_fail (g_task_async_result_is_valid (result,
                                                         G_OBJECT (volume),
                                                         g_vfs_afp_volume_set_fork_size),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)result;
+  task = (GTask *)result;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -2264,7 +2264,7 @@ static void
 set_unix_privs_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -2273,7 +2273,7 @@ set_unix_privs_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -2284,27 +2284,27 @@ set_unix_privs_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("Target object doesn't exist"));
         break;
       case AFP_RESULT_VOL_LOCKED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Volume is read-only"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -2336,7 +2336,7 @@ g_vfs_afp_volume_set_unix_privs (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -2366,11 +2366,11 @@ g_vfs_afp_volume_set_unix_privs (GVfsAfpVolume       *volume,
   /* UAPermissions */
   g_vfs_afp_command_put_uint32 (comm, ua_permissions);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_set_unix_privs);
 
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     set_unix_privs_cb, cancellable, simple);
+                                     set_unix_privs_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -2391,15 +2391,15 @@ g_vfs_afp_volume_set_unix_privs_finish (GVfsAfpVolume  *volume,
                                         GAsyncResult   *res,
                                         GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_set_unix_privs),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   return TRUE;
@@ -2413,9 +2413,9 @@ static void
 enumerate_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
   
-  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (simple)));
+  GVfsAfpVolume *volume = G_VFS_AFP_VOLUME (g_async_result_get_source_object (G_ASYNC_RESULT (task)));
   GVfsAfpVolumePrivate *priv = volume->priv;
 
   GVfsAfpReply *reply;
@@ -2430,7 +2430,7 @@ enumerate_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -2442,23 +2442,23 @@ enumerate_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_OBJECT_NOT_FOUND:
-        g_simple_async_result_set_op_res_gpointer (simple, NULL, NULL);
+        g_task_return_pointer (task, NULL, NULL);
         break;
         
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_DIR_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("Directory doesn't exist"));
         break;
       case AFP_RESULT_OBJECT_TYPE_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY,
                                          _("Target object is not a directory"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
@@ -2498,12 +2498,12 @@ enumerate_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   }
   g_object_unref (reply);
 
-  g_simple_async_result_set_op_res_gpointer (simple, infos,
+  g_task_return_pointer (task, infos,
                                              (GDestroyNotify)g_ptr_array_unref);
   
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -2531,21 +2531,21 @@ g_vfs_afp_volume_enumerate (GVfsAfpVolume       *volume,
   gint32 max;
   
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
   priv = volume->priv;
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback,
+  task = g_task_new (volume, callback,
                                       user_data, g_vfs_afp_volume_enumerate);
   
   max = (priv->server->version >= AFP_VERSION_3_1) ? G_MAXINT32 : G_MAXINT16;
   /* Can't enumerate any more files */
   if (start_index > max)
   {
-    g_simple_async_result_set_op_res_gpointer (simple, NULL, NULL);
-    g_simple_async_result_complete_in_idle (simple);
+    g_task_return_pointer (task, NULL, NULL);
+    g_task_async_result_complete_in_idle (task);
     return;
   }
   
@@ -2588,7 +2588,7 @@ g_vfs_afp_volume_enumerate (GVfsAfpVolume       *volume,
   g_vfs_afp_command_put_pathname (comm, directory);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
-                                     enumerate_cb, cancellable, simple);
+                                     enumerate_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -2612,19 +2612,19 @@ g_vfs_afp_volume_enumerate_finish (GVfsAfpVolume  *volume,
                                    GPtrArray      **infos,
                                    GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_enumerate),
                         FALSE);
   g_return_val_if_fail (infos != NULL, FALSE);
   
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
-  *infos = g_simple_async_result_get_op_res_gpointer (simple);
+  *infos = g_task_propagate_pointer (task, error);
   if (*infos)
     g_ptr_array_ref (*infos);
   
@@ -2635,7 +2635,7 @@ static void
 close_replace_exchange_files_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -2644,7 +2644,7 @@ close_replace_exchange_files_cb (GObject *source_object, GAsyncResult *res, gpoi
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
   
@@ -2656,27 +2656,27 @@ close_replace_exchange_files_cb (GObject *source_object, GAsyncResult *res, gpoi
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("Permission denied"));
         break;
       case AFP_RESULT_ID_NOT_FOUND:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                                          _("File doesn't exist"));
         break;
       case AFP_RESULT_OBJECT_TYPE_ERR:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY,
                                          _("File is directory"));
         break;   
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
   
 /*
@@ -2702,7 +2702,7 @@ g_vfs_afp_volume_exchange_files (GVfsAfpVolume       *volume,
 {
   GVfsAfpVolumePrivate *priv;
   GVfsAfpCommand *comm;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
 
@@ -2724,12 +2724,12 @@ g_vfs_afp_volume_exchange_files (GVfsAfpVolume       *volume,
   /* DestPath */
   g_vfs_afp_command_put_pathname (comm, destination);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_exchange_files);
   
   g_vfs_afp_connection_send_command (priv->server->conn, comm, NULL,
                                      close_replace_exchange_files_cb,
-                                     cancellable, simple);
+                                     cancellable, task);
   g_object_unref (comm); 
 }
 
@@ -2750,15 +2750,15 @@ g_vfs_afp_volume_exchange_files_finish (GVfsAfpVolume  *volume,
                                         GAsyncResult   *res,
                                         GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_exchange_files),
                         FALSE);
   
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
   
   return TRUE;
@@ -2768,7 +2768,7 @@ static void
 write_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -2778,7 +2778,7 @@ write_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -2790,15 +2790,15 @@ write_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                   _("File is not open for write access"));
         break;
       case AFP_RESULT_DISK_FULL:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
                                   _("Not enough space on volume"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
@@ -2808,11 +2808,11 @@ write_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   g_vfs_afp_reply_read_int64 (reply, last_written);
   g_object_unref (reply);
   
-  g_simple_async_result_set_op_res_gpointer (simple, last_written, g_free); 
+  g_task_return_pointer (task, last_written, g_free); 
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -2843,7 +2843,7 @@ g_vfs_afp_volume_write_to_fork (GVfsAfpVolume       *volume,
 {
   GVfsAfpCommand *comm;
   guint32 req_count;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
   
@@ -2861,11 +2861,11 @@ g_vfs_afp_volume_write_to_fork (GVfsAfpVolume       *volume,
 
   g_vfs_afp_command_set_buffer (comm, buffer, buffer_size);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_write_to_fork);
   
   g_vfs_afp_connection_send_command (volume->priv->server->conn, comm, NULL,
-                                     write_ext_cb, cancellable, simple);
+                                     write_ext_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -2888,19 +2888,19 @@ g_vfs_afp_volume_write_to_fork_finish (GVfsAfpVolume  *volume,
                                        gint64         *last_written,
                                        GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_write_to_fork),
                         FALSE);
   
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   if (last_written)
-    *last_written = *((gint64 *)g_simple_async_result_get_op_res_gpointer (simple));
+    *last_written = *((gint64 *)g_task_propagate_pointer (task, error));
   
   return TRUE;
 }
@@ -2909,7 +2909,7 @@ static void
 read_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GVfsAfpConnection *conn = G_VFS_AFP_CONNECTION (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   GVfsAfpReply *reply;
   GError *err = NULL;
@@ -2918,7 +2918,7 @@ read_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   reply = g_vfs_afp_connection_send_command_finish (conn, res, &err);
   if (!reply)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
@@ -2931,22 +2931,22 @@ read_ext_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     switch (res_code)
     {
       case AFP_RESULT_ACCESS_DENIED:
-        g_simple_async_result_set_error (simple, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
                                   _("File is not open for read access"));
         break;
       default:
-        g_simple_async_result_take_error (simple, afp_result_code_to_gerror (res_code));
+        g_task_async_result_take_error (task, afp_result_code_to_gerror (res_code));
         break;
     }
     goto done;
   }
 
-  g_simple_async_result_set_op_res_gssize (simple, g_vfs_afp_reply_get_size (reply));
+  g_task_return_int (task, g_vfs_afp_reply_get_size (reply));
   g_object_unref (reply);
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 /*
@@ -2975,7 +2975,7 @@ g_vfs_afp_volume_read_from_fork (GVfsAfpVolume       *volume,
 {
   GVfsAfpCommand *comm;
   guint32 req_count;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_return_if_fail (G_VFS_IS_AFP_VOLUME (volume));
   
@@ -2991,11 +2991,11 @@ g_vfs_afp_volume_read_from_fork (GVfsAfpVolume       *volume,
   req_count = MIN (bytes_requested, G_MAXUINT32);
   g_vfs_afp_command_put_int64 (comm, req_count);
 
-  simple = g_simple_async_result_new (G_OBJECT (volume), callback, user_data,
+  task = g_task_new (volume, callback, user_data,
                                       g_vfs_afp_volume_read_from_fork);
   
   g_vfs_afp_connection_send_command (volume->priv->server->conn, comm, buffer,
-                                     read_ext_cb, cancellable, simple);
+                                     read_ext_cb, cancellable, task);
   g_object_unref (comm);
 }
 
@@ -3018,19 +3018,19 @@ g_vfs_afp_volume_read_from_fork_finish (GVfsAfpVolume  *volume,
                                         gsize          *bytes_read,
                                         GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (volume),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (volume),
                                                         g_vfs_afp_volume_read_from_fork),
                         FALSE);
   
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   if (bytes_read)
-    *bytes_read = g_simple_async_result_get_op_res_gssize (simple);
+    *bytes_read = g_task_propagate_ssize (task, error);
   
   return TRUE;
 }

@@ -179,12 +179,12 @@ unmount_reply (DBusMessage *reply,
 	       GError *io_error,
 	       gpointer _data)
 {
-  GSimpleAsyncResult *result = _data;
+  GTask *result = _data;
 
   if (io_error != NULL)
-    g_simple_async_result_set_from_error (result, io_error);
+    g_task_return_error (result, io_error);
   
-  g_simple_async_result_complete (result);
+  g_task_async_result_complete (result);
   g_object_unref (result);
 }
 
@@ -199,7 +199,7 @@ g_daemon_mount_unmount_with_operation (GMount *mount,
   GDaemonMount *daemon_mount = G_DAEMON_MOUNT (mount);
   DBusMessage *message;
   GMountInfo *mount_info;
-  GSimpleAsyncResult *res;
+  GTask *res;
   guint32 dbus_flags;
   GMountSource *mount_source;
   const char *dbus_id, *obj_path;
@@ -222,7 +222,7 @@ g_daemon_mount_unmount_with_operation (GMount *mount,
                                DBUS_TYPE_UINT32, &dbus_flags,
                                0);
   
-  res = g_simple_async_result_new (G_OBJECT (mount),
+  res = g_task_new (mount,
 				   callback, user_data,
 				   g_daemon_mount_unmount_with_operation);
   
@@ -288,13 +288,13 @@ g_daemon_mount_guess_content_type (GMount              *mount,
                                    GAsyncReadyCallback  callback,
                                    gpointer             user_data)
 {
-  GSimpleAsyncResult *simple;
-  simple = g_simple_async_result_new (G_OBJECT (mount),
+  GTask *task;
+  task = g_task_new (mount,
                                       callback,
                                       user_data,
                                       NULL);
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 }
 
 static char **

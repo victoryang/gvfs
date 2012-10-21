@@ -735,7 +735,7 @@ struct MountOpData
 {
   GGduVolume *volume;
   GduDevice *device_to_mount;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   GCancellable *cancellable;
   gulong cancelled_handler_id;
 
@@ -751,7 +751,7 @@ mount_op_data_unref (MountOpData *data)
   g_object_unref (data->volume);
   if (data->device_to_mount != NULL)
     g_object_unref (data->device_to_mount);
-  g_object_unref (data->simple);
+  g_object_unref (data->task);
   if (data->cancelled_handler_id != 0)
     g_signal_handler_disconnect (data->cancellable, data->cancelled_handler_id);
   if (data->cancellable != NULL)
@@ -776,11 +776,11 @@ cancel_pending_mount_op (MountOpData *data)
     g_signal_emit_by_name (data->mount_operation, "aborted");
 
   /* complete the operation (sends reply to caller) */
-  g_simple_async_result_set_error (data->simple,
+  g_task_return_new_error (data->task,
                                    G_IO_ERROR,
                                    G_IO_ERROR_FAILED_HANDLED,
                                    "Operation was cancelled");
-  g_simple_async_result_complete (data->simple);
+  g_task_async_result_complete (data->task);
 }
 
 static void
@@ -803,7 +803,7 @@ mount_cb (GduDevice *device,
           error->domain = G_IO_ERROR;
           error->code = G_IO_ERROR_FAILED_HANDLED;
         }
-      g_simple_async_result_set_from_error (data->simple, error);
+      g_task_return_error (data->task, error);
       g_error_free (error);
     }
   else
@@ -811,7 +811,7 @@ mount_cb (GduDevice *device,
       g_free (mount_point);
     }
 
-  g_simple_async_result_complete (data->simple);
+  g_task_async_result_complete (data->task);
 
  bailout:
   data->volume->pending_mount_op = NULL;
@@ -837,11 +837,11 @@ mount_cleartext_device (MountOpData *data,
   data->device_to_mount = gdu_pool_get_by_object_path (pool, object_path_of_cleartext_device);
   if (data->device_to_mount == NULL)
     {
-      g_simple_async_result_set_error (data->simple,
+      g_task_return_new_error (data->task,
                                        G_IO_ERROR,
                                        G_IO_ERROR_FAILED,
                                        "Successfully unlocked encrypted volume but cleartext device does not exist");
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_complete (data->task);
       data->volume->pending_mount_op = NULL;
       mount_op_data_unref (data);
     }
@@ -918,9 +918,9 @@ unlock_cb (GduDevice  *device,
           error->domain = G_IO_ERROR;
           error->code = G_IO_ERROR_FAILED_HANDLED;
         }
-      g_simple_async_result_set_from_error (data->simple, error);
+      g_task_return_error (data->task, error);
       g_error_free (error);
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_complete (data->task);
       data->volume->pending_mount_op = NULL;
       mount_op_data_unref (data);
     }
@@ -1000,19 +1000,19 @@ mount_operation_reply (GMountOperation       *mount_operation,
       if (result == G_MOUNT_OPERATION_ABORTED)
         {
           /* The user aborted the operation so consider it "handled" */
-          g_simple_async_result_set_error (data->simple,
+          g_task_return_new_error (data->task,
                                            G_IO_ERROR,
                                            G_IO_ERROR_FAILED_HANDLED,
                                            "Password dialog aborted (user should never see this error since it is G_IO_ERROR_FAILED_HANDLED)");
         }
       else
         {
-          g_simple_async_result_set_error (data->simple,
+          g_task_return_new_error (data->task,
                                            G_IO_ERROR,
                                            G_IO_ERROR_PERMISSION_DENIED,
                                            "Expected G_MOUNT_OPERATION_HANDLED but got %d", result);
         }
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_complete (data->task);
       data->volume->pending_mount_op = NULL;
       mount_op_data_unref (data);
       goto out;
@@ -1060,11 +1060,11 @@ mount_with_mount_operation (MountOpData *data)
 
   if (data->mount_operation == NULL)
     {
-      g_simple_async_result_set_error (data->simple,
+      g_task_return_new_error (data->task,
                                        G_IO_ERROR,
                                        G_IO_ERROR_FAILED,
                                        "Password required to access the encrypted data");
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_complete (data->task);
       data->volume->pending_mount_op = NULL;
       mount_op_data_unref (data);
       goto out;
@@ -1154,7 +1154,7 @@ g_gdu_volume_mount (GVolume             *_volume,
                     gpointer             user_data)
 {
   GGduVolume *volume = G_GDU_VOLUME (_volume);
-  GSimpleAsyncResult *simple;
+  GTask *task;
   GduDevice *device;
   GduPool *pool;
   const gchar *usage;
@@ -1178,14 +1178,14 @@ g_gdu_volume_mount (GVolume             *_volume,
 
   if (volume->pending_mount_op != NULL)
     {
-      simple = g_simple_async_result_new_error (G_OBJECT (volume),
+      task = g_task_new_error (G_OBJECT (volume),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_FAILED,
                                                 "A mount operation is already pending");
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       goto out;
     }
 
@@ -1193,14 +1193,14 @@ g_gdu_volume_mount (GVolume             *_volume,
 
   if (device == NULL)
     {
-      simple = g_simple_async_result_new_error (G_OBJECT (volume),
+      task = g_task_new_error (G_OBJECT (volume),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_FAILED,
                                                 "Underlying device missing");
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       goto out;
     }
 
@@ -1216,12 +1216,12 @@ g_gdu_volume_mount (GVolume             *_volume,
    */
   if (gdu_device_optical_disc_get_is_blank (device) || gdu_device_is_mounted (device))
     {
-      simple = g_simple_async_result_new (G_OBJECT (volume),
+      task = g_task_new (volume,
                                           callback,
                                           user_data,
                                           g_gdu_volume_mount);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       goto out;
     }
 
@@ -1229,7 +1229,7 @@ g_gdu_volume_mount (GVolume             *_volume,
 
   data->volume = g_object_ref (volume);
 
-  data->simple = g_simple_async_result_new (G_OBJECT (volume),
+  data->task = g_task_new (volume,
                                             callback,
                                             user_data,
                                             g_gdu_volume_mount);
@@ -1281,11 +1281,11 @@ g_gdu_volume_mount (GVolume             *_volume,
       /* don't put up a password dialog if the daemon is inhibited */
       if (gdu_pool_is_daemon_inhibited (pool))
         {
-          g_simple_async_result_set_error (data->simple,
+          g_task_return_new_error (data->task,
                                            G_IO_ERROR,
                                            G_IO_ERROR_FAILED_HANDLED,
                                            "Daemon is currently inhibited");
-          g_simple_async_result_complete (data->simple);
+          g_task_async_result_complete (data->task);
           volume->pending_mount_op = NULL;
           mount_op_data_unref (data);
           goto out;
@@ -1314,11 +1314,11 @@ g_gdu_volume_mount_finish (GVolume       *volume,
                            GAsyncResult  *result,
                            GError       **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (result);
+  GTask *task = G_TASK (result);
 
-  //g_warn_if_fail (g_simple_async_result_get_source_tag (simple) == g_gdu_volume_mount);
+  //g_warn_if_fail (g_task_async_result_get_source_tag (task) == g_gdu_volume_mount);
 
-  return !g_simple_async_result_propagate_error (simple, error);
+  return !g_task_async_result_propagate_error (task, error);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -1356,19 +1356,19 @@ mount_point_op_changed_cb (GVolume *volume,
                            gpointer user_data)
 {
   MountPointOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   /* keep waiting if the mount hasn't appeared */
   if (data->volume->mount == NULL)
     goto out;
 
-  simple = g_simple_async_result_new (G_OBJECT (data->volume),
+  task = g_task_new (data->volume,
                                       data->callback,
                                       data->user_data,
                                       NULL);
   /* complete in idle to make sure the mount is added before we return */
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 
   g_signal_handler_disconnect (data->volume, data->wait_for_mount_changed_signal_handler_id);
   g_source_remove (data->wait_for_mount_timeout_id);
@@ -1383,16 +1383,16 @@ static gboolean
 mount_point_op_never_appeared_cb (gpointer user_data)
 {
   MountPointOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  simple = g_simple_async_result_new_error (G_OBJECT (data->volume),
+  task = g_task_new_error (G_OBJECT (data->volume),
                                             data->callback,
                                             data->user_data,
                                             G_IO_ERROR,
                                             G_IO_ERROR_FAILED,
                                             "Timeout waiting for mount to appear");
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 
   g_signal_handler_disconnect (data->volume, data->wait_for_mount_changed_signal_handler_id);
   g_source_remove (data->wait_for_mount_timeout_id);
@@ -1406,7 +1406,7 @@ static void
 mount_point_op_cb (GPid pid, gint status, gpointer user_data)
 {
   MountPointOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_spawn_close_pid (pid);
 
@@ -1416,13 +1416,13 @@ mount_point_op_cb (GPid pid, gint status, gpointer user_data)
       error = g_error_new_literal (G_IO_ERROR,
                                    G_IO_ERROR_FAILED,
                                    data->error_string->str);
-      simple = g_simple_async_result_new_from_error (G_OBJECT (data->volume),
+      task = g_task_new_from_error (G_OBJECT (data->volume),
                                                      data->callback,
                                                      data->user_data,
                                                      error);
       g_error_free (error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       mount_point_op_free (data);
     }
   else
@@ -1439,7 +1439,7 @@ mount_point_op_cb (GPid pid, gint status, gpointer user_data)
        */
       if (data->volume->mount == NULL)
         {
-          /* no need to ref, GSimpleAsyncResult has a ref on data->volume */
+          /* no need to ref, GTask has a ref on data->volume */
           data->wait_for_mount_timeout_id = g_timeout_add (5 * 1000,
                                             mount_point_op_never_appeared_cb,
                                             data);
@@ -1451,12 +1451,12 @@ mount_point_op_cb (GPid pid, gint status, gpointer user_data)
       else
         {
           /* have the mount already, finish up */
-          simple = g_simple_async_result_new (G_OBJECT (data->volume),
+          task = g_task_new (data->volume,
                                               data->callback,
                                               data->user_data,
                                               NULL);
-          g_simple_async_result_complete (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete (task);
+          g_object_unref (task);
           mount_point_op_free (data);
         }
     }
@@ -1550,13 +1550,13 @@ g_gdu_volume_mount_unix_mount_point (GGduVolume          *volume,
 handle_error:
   if (error != NULL)
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_from_error (G_OBJECT (data->volume),
+      GTask *task;
+      task = g_task_new_from_error (G_OBJECT (data->volume),
                                                      data->callback,
                                                      data->user_data,
                                                      error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
 
       mount_point_op_free (data);
     }
@@ -1608,15 +1608,15 @@ g_gdu_volume_eject_with_operation (GVolume              *volume,
     }
   else
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (volume),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (volume),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_FAILED,
                                                 _("Operation not supported by backend"));
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 }
 
@@ -1635,7 +1635,7 @@ g_gdu_volume_eject_with_operation_finish (GVolume        *volume,
     }
   else
     {
-      g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error);
+      g_task_async_result_propagate_error (G_TASK (result), error);
       res = FALSE;
     }
 

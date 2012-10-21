@@ -517,7 +517,7 @@ static void
 bin_unmount_cb (GPid pid, gint status, gpointer user_data)
 {
   BinUnmountData *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   g_spawn_close_pid (pid);
 
@@ -534,7 +534,7 @@ bin_unmount_cb (GPid pid, gint status, gpointer user_data)
       error = g_error_new_literal (G_IO_ERROR,
                                    error_code,
                                    data->error_string->str);
-      simple = g_simple_async_result_new_from_error (G_OBJECT (data->mount),
+      task = g_task_new_from_error (G_OBJECT (data->mount),
                                                      data->callback,
                                                      data->user_data,
                                                      error);
@@ -542,14 +542,14 @@ bin_unmount_cb (GPid pid, gint status, gpointer user_data)
     }
   else
     {
-      simple = g_simple_async_result_new (G_OBJECT (data->mount),
+      task = g_task_new (data->mount,
                                           data->callback,
                                           data->user_data,
                                           NULL);
     }
 
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 
   g_source_remove (data->error_channel_source_id);
   g_io_channel_unref (data->error_channel);
@@ -630,13 +630,13 @@ handle_error:
 
   if (error != NULL)
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_from_error (G_OBJECT (data->mount),
+      GTask *task;
+      task = g_task_new_from_error (G_OBJECT (data->mount),
                                                      data->callback,
                                                      data->user_data,
                                                      error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
 
       if (data->error_string != NULL)
         g_string_free (data->error_string, TRUE);
@@ -756,7 +756,7 @@ _gdu_unmount_luks_lock_cb (GduDevice *device,
                            gpointer   user_data)
 {
   _GduUnmountData *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   if (error != NULL)
     {
@@ -769,15 +769,15 @@ _gdu_unmount_luks_lock_cb (GduDevice *device,
 
       if (!data->completed)
         {
-          simple = g_simple_async_result_new_from_error (G_OBJECT (data->mount),
+          task = g_task_new_from_error (G_OBJECT (data->mount),
                                                          data->callback,
                                                          data->user_data,
                                                          error);
           g_error_free (error);
           data->completed = TRUE;
           _gdu_unmount_data_unref (data);
-          g_simple_async_result_complete_in_idle (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete_in_idle (task);
+          g_object_unref (task);
         }
       goto out;
     }
@@ -785,14 +785,14 @@ _gdu_unmount_luks_lock_cb (GduDevice *device,
   /* we're done */
   if (!data->completed)
     {
-      simple = g_simple_async_result_new (G_OBJECT (data->mount),
+      task = g_task_new (data->mount,
                                           data->callback,
                                           data->user_data,
                                           NULL);
       data->completed = TRUE;
       _gdu_unmount_data_unref (data);
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
     }
 
  out:
@@ -809,7 +809,7 @@ _gdu_unmount_on_mount_op_reply (GMountOperation       *mount_operation,
                                 gpointer              user_data)
 {
   _GduUnmountData *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   gint choice;
 
   /* disconnect the signal handler */
@@ -826,7 +826,7 @@ _gdu_unmount_on_mount_op_reply (GMountOperation       *mount_operation,
       /* don't show an error dialog here */
       if (!data->completed)
         {
-          simple = g_simple_async_result_new_error (G_OBJECT (data->mount),
+          task = g_task_new_error (G_OBJECT (data->mount),
                                                     data->callback,
                                                     data->user_data,
                                                     G_IO_ERROR,
@@ -835,8 +835,8 @@ _gdu_unmount_on_mount_op_reply (GMountOperation       *mount_operation,
                                                     "error since it is G_IO_ERROR_FAILED_HANDLED)");
           data->completed = TRUE;
           _gdu_unmount_data_unref (data);
-          g_simple_async_result_complete_in_idle (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete_in_idle (task);
+          g_object_unref (task);
         }
     }
   else if (result == G_MOUNT_OPERATION_HANDLED)
@@ -852,7 +852,7 @@ _gdu_unmount_on_mount_op_reply (GMountOperation       *mount_operation,
        */
       if (!data->completed)
         {
-          simple = g_simple_async_result_new_error (G_OBJECT (data->mount),
+          task = g_task_new_error (G_OBJECT (data->mount),
                                                     data->callback,
                                                     data->user_data,
                                                     G_IO_ERROR,
@@ -860,8 +860,8 @@ _gdu_unmount_on_mount_op_reply (GMountOperation       *mount_operation,
                                                     _("One or more programs are preventing the unmount operation."));
           data->completed = TRUE;
           _gdu_unmount_data_unref (data);
-          g_simple_async_result_complete_in_idle (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete_in_idle (task);
+          g_object_unref (task);
         }
     }
 }
@@ -891,7 +891,7 @@ _gdu_unmount_cb (GduDevice *device,
                  gpointer   user_data)
 {
   _GduUnmountData *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   if (error != NULL)
     {
@@ -955,15 +955,15 @@ _gdu_unmount_cb (GduDevice *device,
 
       if (!data->completed)
         {
-          simple = g_simple_async_result_new_from_error (G_OBJECT (data->mount),
+          task = g_task_new_from_error (G_OBJECT (data->mount),
                                                          data->callback,
                                                          data->user_data,
                                                          error);
           g_error_free (error);
           data->completed = TRUE;
           _gdu_unmount_data_unref (data);
-          g_simple_async_result_complete_in_idle (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete_in_idle (task);
+          g_object_unref (task);
         }
       goto out;
     }
@@ -980,7 +980,7 @@ _gdu_unmount_cb (GduDevice *device,
         {
           if (!data->completed)
             {
-              simple = g_simple_async_result_new_error (G_OBJECT (data->mount),
+              task = g_task_new_error (G_OBJECT (data->mount),
                                                         data->callback,
                                                         data->user_data,
                                                         G_IO_ERROR,
@@ -988,8 +988,8 @@ _gdu_unmount_cb (GduDevice *device,
                                                         _("Cannot get LUKS cleartext slave"));
               data->completed = TRUE;
               _gdu_unmount_data_unref (data);
-              g_simple_async_result_complete_in_idle (simple);
-              g_object_unref (simple);
+              g_task_async_result_complete_in_idle (task);
+              g_object_unref (task);
             }
           goto out;
         }
@@ -1002,7 +1002,7 @@ _gdu_unmount_cb (GduDevice *device,
         {
           if (!data->completed)
             {
-              simple = g_simple_async_result_new_error (G_OBJECT (data->mount),
+              task = g_task_new_error (G_OBJECT (data->mount),
                                                         data->callback,
                                                         data->user_data,
                                                         G_IO_ERROR,
@@ -1011,8 +1011,8 @@ _gdu_unmount_cb (GduDevice *device,
                                                         luks_cleartext_slave_object_path);
               data->completed = TRUE;
               _gdu_unmount_data_unref (data);
-              g_simple_async_result_complete_in_idle (simple);
-              g_object_unref (simple);
+              g_task_async_result_complete_in_idle (task);
+              g_object_unref (task);
             }
           goto out;
         }
@@ -1029,14 +1029,14 @@ _gdu_unmount_cb (GduDevice *device,
   /* not a cleartext device => we're done */
   if (!data->completed)
     {
-      simple = g_simple_async_result_new (G_OBJECT (data->mount),
+      task = g_task_new (data->mount,
                                           data->callback,
                                           data->user_data,
                                           NULL);
       data->completed = TRUE;
       _gdu_unmount_data_unref (data);
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
     }
 
  out:
@@ -1063,9 +1063,9 @@ _gdu_unmount_on_cancelled (GMount   *mount,
 
   if (!data->completed)
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
-      simple = g_simple_async_result_new_error (G_OBJECT (data->mount),
+      task = g_task_new_error (G_OBJECT (data->mount),
                                                 data->callback,
                                                 data->user_data,
                                                 G_IO_ERROR,
@@ -1073,8 +1073,8 @@ _gdu_unmount_on_cancelled (GMount   *mount,
                                                 _("Operation was cancelled"));
       data->completed = TRUE;
       _gdu_unmount_data_unref (data);
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
     }
 }
 
@@ -1150,13 +1150,13 @@ g_gdu_mount_unmount_with_operation (GMount              *_mount,
       if (mount->is_burn_mount)
         {
           /* burn mounts are really never mounted so complete successfully immediately */
-          GSimpleAsyncResult *simple;
-          simple = g_simple_async_result_new (G_OBJECT (mount),
+          GTask *task;
+          task = g_task_new (mount,
                                               callback,
                                               user_data,
                                               NULL);
-          g_simple_async_result_complete (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete (task);
+          g_object_unref (task);
         }
       else
         {
@@ -1168,15 +1168,15 @@ g_gdu_mount_unmount_with_operation (GMount              *_mount,
     }
   else
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (mount),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (mount),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_FAILED,
                                                 _("Operation not supported by backend"));
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 }
 
@@ -1185,7 +1185,7 @@ g_gdu_mount_unmount_with_operation_finish (GMount       *mount,
                                            GAsyncResult  *result,
                                            GError       **error)
 {
-  return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error);
+  return !g_task_async_result_propagate_error (G_TASK (result), error);
 }
 
 static void
@@ -1252,15 +1252,15 @@ g_gdu_mount_eject_with_operation (GMount              *mount,
     }
   else
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (mount),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (mount),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_FAILED,
                                                 _("Operation not supported by backend"));
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 
 }
@@ -1287,7 +1287,7 @@ g_gdu_mount_eject_with_operation_finish (GMount        *_mount,
     }
   else
     {
-      g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error);
+      g_task_async_result_propagate_error (G_TASK (result), error);
       res = FALSE;
     }
 
@@ -1420,15 +1420,15 @@ g_gdu_mount_guess_content_type (GMount              *mount,
                                 GAsyncReadyCallback  callback,
                                 gpointer             user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   /* TODO: handle force_rescan */
-  simple = g_simple_async_result_new (G_OBJECT (mount),
+  task = g_task_new (mount,
                                       callback,
                                       user_data,
                                       NULL);
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static gchar **

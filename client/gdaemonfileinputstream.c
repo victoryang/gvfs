@@ -1837,7 +1837,7 @@ async_read_done (GInputStream *stream,
   ReadOperation *op;
   gssize count_read;
   GError *error;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   op = op_data;
 
@@ -1852,18 +1852,18 @@ async_read_done (GInputStream *stream,
       error = op->ret_error;
     }
 
-  simple = g_simple_async_result_new (G_OBJECT (stream),
+  task = g_task_new (stream,
 				      callback, user_data,
 				      g_daemon_file_input_stream_read_async);
   
-  g_simple_async_result_set_op_res_gssize (simple, count_read);
+  g_task_return_int (task, count_read);
 
   if (count_read == -1)
-    g_simple_async_result_set_from_error (simple, error);
+    g_task_return_error (task, error);
 
   /* Complete immediately, not in idle, since we're already in a mainloop callout */
-  _g_simple_async_result_complete_with_cancellable (simple, cancellable);
-  g_object_unref (simple);
+  _g_task_async_result_complete_with_cancellable (task, cancellable);
+  g_object_unref (task);
   
   if (op->ret_error)
     g_error_free (op->ret_error);
@@ -1907,13 +1907,13 @@ g_daemon_file_input_stream_read_finish (GInputStream              *stream,
 					GAsyncResult              *result,
 					GError                   **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   gssize nread;
 
-  simple = G_SIMPLE_ASYNC_RESULT (result);
-  g_assert (g_simple_async_result_get_source_tag (simple) == g_daemon_file_input_stream_read_async);
+  task = G_TASK (result);
+  g_assert (g_task_async_result_get_source_tag (task) == g_daemon_file_input_stream_read_async);
   
-  nread = g_simple_async_result_get_op_res_gssize (simple);
+  nread = g_task_propagate_ssize (task, error);
   return nread;
 }
 
@@ -1948,7 +1948,7 @@ async_close_done (GInputStream *stream,
 		  GError *io_error)
 {
   GDaemonFileInputStream *file;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   CloseOperation *op;
   gboolean result;
   GError *error;
@@ -1979,16 +1979,16 @@ async_close_done (GInputStream *stream,
     g_input_stream_close (file->data_stream, cancellable, NULL);
 
 
-  simple = g_simple_async_result_new (G_OBJECT (stream),
+  task = g_task_new (stream,
 				      callback, user_data,
 				      g_daemon_file_input_stream_read_async);
 
   if (!result)
-    g_simple_async_result_set_from_error (simple, error);
+    g_task_return_error (task, error);
 
   /* Complete immediately, not in idle, since we're already in a mainloop callout */
-  _g_simple_async_result_complete_with_cancellable (simple, cancellable);
-  g_object_unref (simple);
+  _g_task_async_result_complete_with_cancellable (task, cancellable);
+  g_object_unref (task);
   
   if (op->ret_error)
     g_error_free (op->ret_error);
@@ -2035,7 +2035,7 @@ async_query_done (GInputStream *stream,
                   GCancellable *cancellable,
 		  GError *io_error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   QueryOperation *op;
   GFileInfo *info;
   GError *error;
@@ -2053,19 +2053,19 @@ async_query_done (GInputStream *stream,
       error = op->ret_error;
     }
 
-  simple = g_simple_async_result_new (G_OBJECT (stream),
+  task = g_task_new (stream,
 				      callback, user_data,
 				      g_daemon_file_input_stream_query_info_async);
 
   if (info == NULL)
-    g_simple_async_result_set_from_error (simple, error);
+    g_task_return_error (task, error);
   else
-    g_simple_async_result_set_op_res_gpointer (simple, info,
+    g_task_return_pointer (task, info,
 					       g_object_unref);
   
   /* Complete immediately, not in idle, since we're already in a mainloop callout */
-  _g_simple_async_result_complete_with_cancellable (simple, cancellable);
-  g_object_unref (simple);
+  _g_task_async_result_complete_with_cancellable (task, cancellable);
+  g_object_unref (task);
   
   if (op->ret_error)
     g_error_free (op->ret_error);
@@ -2106,13 +2106,13 @@ g_daemon_file_input_stream_query_info_finish (GFileInputStream     *stream,
 					      GAsyncResult         *result,
 					      GError              **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   GFileInfo *info;
 
-  simple = G_SIMPLE_ASYNC_RESULT (result);
-  g_assert (g_simple_async_result_get_source_tag (simple) == g_daemon_file_input_stream_query_info_async);
+  task = G_TASK (result);
+  g_assert (g_task_async_result_get_source_tag (task) == g_daemon_file_input_stream_query_info_async);
   
-  info = g_simple_async_result_get_op_res_gpointer (simple);
+  info = g_task_propagate_pointer (task, error);
   
   return g_object_ref (info);
   

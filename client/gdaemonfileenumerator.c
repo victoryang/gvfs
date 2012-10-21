@@ -55,7 +55,7 @@ struct _GDaemonFileEnumerator
   int async_requested_files;
   gulong cancelled_tag;
   guint timeout_tag;
-  GSimpleAsyncResult *async_res;
+  GTask *task;
 
   GFileAttributeMatcher *matcher;
   MetaTree *metadata_tree;
@@ -219,25 +219,6 @@ add_metadata (GFileInfo *info,
   g_free (path);
 }
 
-static GCancellable *
-simple_async_result_get_cancellable (GSimpleAsyncResult *res)
-{
-  return g_object_get_data (G_OBJECT (res), "file-enumerator-cancellable");
-}
-
-static void
-simple_async_result_set_cancellable (GSimpleAsyncResult *res,
-                                     GCancellable       *cancellable)
-{
-  if (!cancellable)
-    return;
-
-  g_object_set_data_full (G_OBJECT (res),
-                          "file-enumerator-cancellable",
-                          g_object_ref (cancellable),
-                          g_object_unref);
-}
-
 /* Called with infos lock held */
 static void
 trigger_async_done (GDaemonFileEnumerator *daemon, gboolean ok)
@@ -246,7 +227,7 @@ trigger_async_done (GDaemonFileEnumerator *daemon, gboolean ok)
 
   if (daemon->cancelled_tag != 0)
     {
-      GCancellable *cancellable = simple_async_result_get_cancellable (daemon->async_res);
+      GCancellable *cancellable = g_task_get_cancellable (daemon->task);
 
       /* If ok, we're a normal callback on the main thread,
 	 ensure protection against a thread cancelling and
@@ -290,12 +271,12 @@ trigger_async_done (GDaemonFileEnumerator *daemon, gboolean ok)
 
       g_list_foreach (l, (GFunc)add_metadata, daemon);
 
-      g_simple_async_result_set_op_res_gpointer (daemon->async_res,
-						 l,
-						 (GDestroyNotify)free_info_list);
+      g_task_return_pointer (daemon->task,
+			     l,
+			     (GDestroyNotify)free_info_list);
     }
-
-  g_simple_async_result_complete_in_idle (daemon->async_res);
+  else
+    g_task_return_pointer (daemon->task, NULL, NULL);
   
   daemon->cancelled_tag = 0;
 
@@ -305,8 +286,8 @@ trigger_async_done (GDaemonFileEnumerator *daemon, gboolean ok)
   
   daemon->async_requested_files = 0;
   
-  g_object_unref (daemon->async_res);
-  daemon->async_res = NULL;
+  g_object_unref (daemon->task);
+  daemon->task = NULL;
 }
 
 static DBusHandlerResult
@@ -460,10 +441,10 @@ static void
 async_cancelled (GCancellable *cancellable,
 		 GDaemonFileEnumerator *daemon)
 {
-  g_simple_async_result_set_error (daemon->async_res,
-				   G_IO_ERROR,
-				   G_IO_ERROR_CANCELLED,
-				   _("Operation was cancelled"));
+  g_task_return_new_error (daemon->task,
+			   G_IO_ERROR,
+			   G_IO_ERROR_CANCELLED,
+			   _("Operation was cancelled"));
   G_LOCK (infos);
   trigger_async_done (daemon, FALSE);
   G_UNLOCK (infos);
@@ -498,11 +479,9 @@ g_daemon_file_enumerator_next_files_async (GFileEnumerator     *enumerator,
        * We could possibly pump it ourselves in this case, but i'm not sure
        * how much sense this makes, so we don't for now.
        */
-      g_simple_async_report_error_in_idle  (G_OBJECT (enumerator),
-					    callback,
-					    user_data,
-					    G_IO_ERROR, G_IO_ERROR_FAILED,
-					    "Can't do asynchronous next_files() on a file enumerator created synchronously");
+      g_task_report_new_error  (enumerator, callback, user_data,
+				G_IO_ERROR, G_IO_ERROR_FAILED,
+				"Can't do asynchronous next_files() on a file enumerator created synchronously");
       return;
     }
   
@@ -510,9 +489,7 @@ g_daemon_file_enumerator_next_files_async (GFileEnumerator     *enumerator,
   daemon->cancelled_tag = 0;
   daemon->timeout_tag = 0;
   daemon->async_requested_files = num_files;
-  daemon->async_res = g_simple_async_result_new (G_OBJECT (enumerator), callback, user_data,
-						 g_daemon_file_enumerator_next_files_async);
-  simple_async_result_set_cancellable (daemon->async_res, cancellable);
+  daemon->task = g_task_new (enumerator, cancellable, callback, user_data);
 
   /* Maybe we already have enough info to fulfill the requeust already */
   if (daemon->done ||
@@ -536,23 +513,7 @@ g_daemon_file_enumerator_next_files_finish (GFileEnumerator  *enumerator,
 					    GAsyncResult     *res,
 					    GError          **error)
 {
-  GSimpleAsyncResult *result = G_SIMPLE_ASYNC_RESULT (res);
-  GCancellable *cancellable;
-  GList *l;
-
-  cancellable = simple_async_result_get_cancellable (result);
-  if (g_cancellable_is_cancelled (cancellable))
-    {
-      g_set_error (error,
-                   G_IO_ERROR,
-                   G_IO_ERROR_CANCELLED,
-                   "%s", _("Operation was cancelled"));
-      return NULL;
-    }
-
-  l = g_simple_async_result_get_op_res_gpointer (result);
-  g_list_foreach (l, (GFunc)g_object_ref, NULL);
-  return g_list_copy (l);
+  return g_task_propagate_pointer (G_TASK (res), error);
 }
 
 static gboolean
@@ -575,13 +536,11 @@ g_daemon_file_enumerator_close_async (GFileEnumerator      *enumerator,
 				      GAsyncReadyCallback   callback,
 				      gpointer              user_data)
 {
-  GSimpleAsyncResult *res;
+  GTask *task;
 
-  res = g_simple_async_result_new (G_OBJECT (enumerator), callback, user_data,
-				   g_daemon_file_enumerator_close_async);
-  simple_async_result_set_cancellable (res, cancellable);
-  g_simple_async_result_complete_in_idle (res);
-  g_object_unref (res);
+  task = g_task_new (enumerator, cancellable, callback, user_data);
+  g_task_return_boolean (task, TRUE);
+  g_object_unref (task);
 }
 
 static gboolean
@@ -589,17 +548,5 @@ g_daemon_file_enumerator_close_finish (GFileEnumerator      *enumerator,
 				       GAsyncResult         *result,
 				       GError              **error)
 {
-  GCancellable *cancellable;
-  
-  cancellable = simple_async_result_get_cancellable (G_SIMPLE_ASYNC_RESULT (result));
-  if (g_cancellable_is_cancelled (cancellable))
-    {
-      g_set_error (error,
-                   G_IO_ERROR,
-                   G_IO_ERROR_CANCELLED,
-                   "%s", _("Operation was cancelled"));
-      return FALSE;
-    }
-
-  return TRUE;
+  return g_task_propagate_boolean (G_TASK (result), error);
 }

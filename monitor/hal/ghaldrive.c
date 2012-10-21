@@ -539,7 +539,7 @@ static void
 spawn_cb (GPid pid, gint status, gpointer user_data)
 {
   SpawnOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
 
   if (WEXITSTATUS (status) != 0)
@@ -548,7 +548,7 @@ spawn_cb (GPid pid, gint status, gpointer user_data)
       error = g_error_new_literal (G_IO_ERROR, 
                                    G_IO_ERROR_FAILED_HANDLED,
                                    "You are not supposed to show G_IO_ERROR_FAILED_HANDLED in the UI");
-      simple = g_simple_async_result_new_from_error (data->object,
+      task = g_task_new_from_error (data->object,
                                                      data->callback,
                                                      data->user_data,
                                                      error);
@@ -556,13 +556,13 @@ spawn_cb (GPid pid, gint status, gpointer user_data)
     }
   else
     {
-      simple = g_simple_async_result_new (data->object,
+      task = g_task_new (data->object,
                                           data->callback,
                                           data->user_data,
                                           NULL);
     }
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
   g_object_unref (data->object);
   g_free (data);
 }
@@ -597,14 +597,14 @@ g_hal_drive_eject_do (GDrive              *drive,
                       &child_pid,
                       &error))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
-      simple = g_simple_async_result_new_from_error (data->object,
+      task = g_task_new_from_error (data->object,
                                                      data->callback,
                                                      data->user_data,
                                                      error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       g_object_unref (drive);
       g_error_free (error);
       g_free (data);
@@ -649,7 +649,7 @@ _eject_unmount_mounts_cb (GObject *source_object,
 {
   UnmountMountsOp *data = user_data;
   GMount *mount = G_MOUNT (source_object);
-  GSimpleAsyncResult *simple;
+  GTask *task;
   GError *error = NULL;
 
   if (!g_mount_unmount_with_operation_finish (mount, res, &error))
@@ -663,13 +663,13 @@ _eject_unmount_mounts_cb (GObject *source_object,
         }
 
       /* unmount failed; need to fail the whole eject operation */
-      simple = g_simple_async_result_new_from_error (G_OBJECT (data->drive),
+      task = g_task_new_from_error (G_OBJECT (data->drive),
                                                      data->callback,
                                                      data->user_data,
                                                      error);
       g_error_free (error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
 
       free_unmount_mounts_op (data);
     }
@@ -791,7 +791,7 @@ static void
 poll_for_media_cb (DBusPendingCall *pending_call, void *user_data)
 {
   PollOp *data = (PollOp *) user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   DBusMessage *reply;
 
   reply = dbus_pending_call_steal_reply (pending_call);
@@ -806,12 +806,12 @@ poll_for_media_cb (DBusPendingCall *pending_call, void *user_data)
       error = g_error_new (G_IO_ERROR,
                            G_IO_ERROR_FAILED,
                            "Cannot invoke CheckForMedia on HAL: %s: %s", dbus_error.name, dbus_error.message);
-      simple = g_simple_async_result_new_from_error (data->object,
+      task = g_task_new_from_error (data->object,
                                                      data->callback,
                                                      data->user_data,
                                                      error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       g_error_free (error);
       dbus_error_free (&dbus_error);
       goto out;
@@ -821,12 +821,12 @@ poll_for_media_cb (DBusPendingCall *pending_call, void *user_data)
    * (the result is whether the media availability state changed)
    */
 
-  simple = g_simple_async_result_new (data->object,
+  task = g_task_new (data->object,
                                       data->callback,
                                       data->user_data,
                                       NULL);
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 
  out:
   g_object_unref (data->object);
@@ -864,16 +864,16 @@ g_hal_drive_poll_for_media (GDrive              *drive,
   if (!dbus_connection_send_with_reply (con, msg, &pending_call, -1))
     {
       GError *error;
-      GSimpleAsyncResult *simple;
+      GTask *task;
       error = g_error_new_literal (G_IO_ERROR,
                                    G_IO_ERROR_FAILED,
                                    "Cannot invoke CheckForMedia on HAL");
-      simple = g_simple_async_result_new_from_error (data->object,
+      task = g_task_new_from_error (data->object,
                                                      data->callback,
                                                      data->user_data,
                                                      error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       g_error_free (error);
       g_object_unref (data->object);
       g_free (data);

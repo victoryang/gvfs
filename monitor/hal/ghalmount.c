@@ -782,7 +782,7 @@ static void
 unmount_cb (GPid pid, gint status, gpointer user_data)
 {
   UnmountOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   if (WEXITSTATUS (status) != 0)
     {
@@ -792,7 +792,7 @@ unmount_cb (GPid pid, gint status, gpointer user_data)
           error = g_error_new_literal (G_IO_ERROR, 
                                        G_IO_ERROR_FAILED,
                                        data->error_string->str);
-          simple = g_simple_async_result_new_from_error (data->object,
+          task = g_task_new_from_error (data->object,
                                                          data->callback,
                                                          data->user_data,
                                                          error);
@@ -804,7 +804,7 @@ unmount_cb (GPid pid, gint status, gpointer user_data)
           error = g_error_new_literal (G_IO_ERROR, 
                                        G_IO_ERROR_FAILED_HANDLED,
                                        "You are not supposed to show G_IO_ERROR_FAILED_HANDLED in the UI");
-          simple = g_simple_async_result_new_from_error (data->object,
+          task = g_task_new_from_error (data->object,
                                                          data->callback,
                                                          data->user_data,
                                                          error);
@@ -813,14 +813,14 @@ unmount_cb (GPid pid, gint status, gpointer user_data)
     }
   else
     {
-      simple = g_simple_async_result_new (data->object,
+      task = g_task_new (data->object,
                                           data->callback,
                                           data->user_data,
                                           NULL);
     }
 
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 
   g_source_remove (data->error_channel_source_id);
   g_io_channel_unref (data->error_channel);
@@ -868,13 +868,13 @@ unmount_do_cb (gpointer user_data)
                                  &(data->error_fd),
                                  &error))
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_from_error (data->object,
+      GTask *task;
+      task = g_task_new_from_error (data->object,
                                                      data->callback,
                                                      data->user_data,
                                                      error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
       g_error_free (error);
       g_strfreev (data->argv);
       g_free (data);
@@ -1147,15 +1147,15 @@ g_hal_mount_guess_content_type (GMount              *mount,
                                 GAsyncReadyCallback  callback,
                                 gpointer             user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   /* TODO: handle force_rescan */
-  simple = g_simple_async_result_new (G_OBJECT (mount),
+  task = g_task_new (mount,
                                       callback,
                                       user_data,
                                       NULL);
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static char **

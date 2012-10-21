@@ -48,7 +48,7 @@ typedef struct {
   SoupOutputStreamCallback finished_cb;
   SoupOutputStreamCallback cancelled_cb;
 
-  GSimpleAsyncResult *result;
+  GTask *result;
 } SoupOutputStreamPrivate;
 #define SOUP_OUTPUT_STREAM_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), SOUP_TYPE_OUTPUT_STREAM, SoupOutputStreamPrivate))
 
@@ -298,9 +298,9 @@ soup_output_stream_write_async (GOutputStream       *stream,
 				gpointer             user_data)
 {
   SoupOutputStreamPrivate *priv = SOUP_OUTPUT_STREAM_GET_PRIVATE (stream);
-  GSimpleAsyncResult *result;
+  GTask *result;
 
-  result = g_simple_async_result_new (G_OBJECT (stream),
+  result = g_task_new (stream,
 				      callback, user_data,
 				      soup_output_stream_write_async);
 
@@ -310,17 +310,17 @@ soup_output_stream_write_async (GOutputStream       *stream,
 
       error = g_error_new (G_IO_ERROR, G_IO_ERROR_NO_SPACE,
 			   "Write would exceed caller-defined file size");
-      g_simple_async_result_set_from_error (result, error);
+      g_task_return_error (result, error);
       g_error_free (error);
     }
   else
     {
       g_byte_array_append (priv->ba, buffer, count);
       priv->offset += count;
-      g_simple_async_result_set_op_res_gssize (result, count);
+      g_task_return_int (result, count);
     }
 
-  g_simple_async_result_complete_in_idle (result);
+  g_task_async_result_complete_in_idle (result);
   g_object_unref (result);
 }
 
@@ -329,13 +329,13 @@ soup_output_stream_write_finish (GOutputStream  *stream,
 				 GAsyncResult   *result,
 				 GError        **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   gssize nwritten;
 
-  simple = G_SIMPLE_ASYNC_RESULT (result);
-  g_warn_if_fail (g_simple_async_result_get_source_tag (simple) == soup_output_stream_write_async);
+  task = G_TASK (result);
+  g_warn_if_fail (g_task_async_result_get_source_tag (task) == soup_output_stream_write_async);
   
-  nwritten = g_simple_async_result_get_op_res_gssize (simple);
+  nwritten = g_task_propagate_ssize (task, error);
   return nwritten;
 }
 
@@ -343,7 +343,7 @@ static void
 close_async_done (GOutputStream *stream)
 {
   SoupOutputStreamPrivate *priv = SOUP_OUTPUT_STREAM_GET_PRIVATE (stream);
-  GSimpleAsyncResult *result;
+  GTask *result;
   GError *error = NULL;
 
   result = priv->result;
@@ -352,17 +352,17 @@ close_async_done (GOutputStream *stream)
   if (g_cancellable_set_error_if_cancelled (priv->cancellable, &error) ||
       set_error_if_http_failed (priv->msg, &error))
     {
-      g_simple_async_result_set_from_error (result, error);
+      g_task_return_error (result, error);
       g_error_free (error);
     }
   else
-    g_simple_async_result_set_op_res_gboolean (result, TRUE);
+    g_task_return_boolean (result, TRUE);
 
   priv->finished_cb = NULL;
   priv->cancelled_cb = NULL;
   soup_output_stream_done_io (stream);
 
-  g_simple_async_result_complete (result);
+  g_task_async_result_complete (result);
   g_object_unref (result);
 }
 
@@ -385,9 +385,9 @@ soup_output_stream_close_async (GOutputStream        *stream,
 				gpointer             user_data)
 {
   SoupOutputStreamPrivate *priv = SOUP_OUTPUT_STREAM_GET_PRIVATE (stream);
-  GSimpleAsyncResult *result;
+  GTask *result;
 
-  result = g_simple_async_result_new (G_OBJECT (stream),
+  result = g_task_new (stream,
 				      callback, user_data,
 				      soup_output_stream_close_async);
 
@@ -397,9 +397,9 @@ soup_output_stream_close_async (GOutputStream        *stream,
 
       error = g_error_new (G_IO_ERROR, G_IO_ERROR_NO_SPACE,
 			   "File is incomplete");
-      g_simple_async_result_set_from_error (result, error);
+      g_task_return_error (result, error);
       g_error_free (error);
-      g_simple_async_result_complete_in_idle (result);
+      g_task_async_result_complete_in_idle (result);
       g_object_unref (result);
       return;
     }

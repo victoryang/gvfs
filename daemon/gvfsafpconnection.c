@@ -662,7 +662,7 @@ typedef struct
   
   GVfsAfpCommand *command;
   char           *reply_buf;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   GCancellable *cancellable;
 } RequestData;
 
@@ -671,8 +671,8 @@ free_request_data (RequestData *req_data)
 {
   if (req_data->command)
     g_object_unref (req_data->command);
-  if (req_data->simple)
-    g_object_unref (req_data->simple);
+  if (req_data->task)
+    g_object_unref (req_data->task);
   if (req_data->cancellable)
     g_object_unref (req_data->cancellable);
 
@@ -785,7 +785,7 @@ static void
 read_all_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   GInputStream *stream = G_INPUT_STREAM (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   gsize bytes_read;
   GError *err = NULL;
@@ -794,11 +794,11 @@ read_all_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
   bytes_read = g_input_stream_read_finish (stream, res, &err);
   if (bytes_read == -1)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
 
-  read_data = g_simple_async_result_get_op_res_gpointer (simple);
+  read_data = g_task_propagate_pointer (task, error);
 
   read_data->bytes_read += bytes_read;
   if (read_data->bytes_read < read_data->count)
@@ -806,13 +806,13 @@ read_all_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
     g_input_stream_read_async (stream,
                                (guint8 *)read_data->buffer + read_data->bytes_read,
                                read_data->count - read_data->bytes_read, 0,
-                               read_data->cancellable, read_all_cb, simple);
+                               read_data->cancellable, read_all_cb, task);
     return;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static void
@@ -825,7 +825,7 @@ read_all_async (GInputStream        *stream,
                 gpointer             user_data)
 {
   ReadAllData *read_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   read_data = g_slice_new0 (ReadAllData);
   read_data->buffer = buffer;
@@ -834,13 +834,13 @@ read_all_async (GInputStream        *stream,
   if (cancellable)
     read_data->cancellable = g_object_ref (cancellable);
   
-  simple = g_simple_async_result_new (G_OBJECT (stream), callback, user_data,
+  task = g_task_new (stream, callback, user_data,
                                       read_all_async);
-  g_simple_async_result_set_op_res_gpointer (simple, read_data,
+  g_task_return_pointer (task, read_data,
                                              (GDestroyNotify)free_read_all_data);
 
   g_input_stream_read_async (stream, buffer, count, io_priority, cancellable,
-                             read_all_cb, simple);
+                             read_all_cb, task);
 }
 
 static gboolean
@@ -849,22 +849,22 @@ read_all_finish (GInputStream *stream,
                  gsize        *bytes_read,
                  GError      **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (stream),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (stream),
                                                         read_all_async),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
 
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
 
   if (bytes_read)
   {
     ReadAllData *read_data;
 
-    read_data = g_simple_async_result_get_op_res_gpointer (simple);
+    read_data = g_task_propagate_pointer (task, error);
     *bytes_read = read_data->bytes_read;
   }
 
@@ -923,9 +923,9 @@ dispatch_reply (GVfsAfpConnection *afp_connection)
                                      dsi_header->totalDataLength, priv->free_reply_buf);
         priv->free_reply_buf = FALSE;
 
-        g_simple_async_result_set_op_res_gpointer (req_data->simple, reply,
+        g_task_return_pointer (req_data->task, reply,
                                                    g_object_unref);
-        g_simple_async_result_complete (req_data->simple);
+        g_task_async_result_complete (req_data->task);
 
         g_hash_table_remove (priv->request_hash,
                              GUINT_TO_POINTER ((guint)dsi_header->requestID));
@@ -1051,7 +1051,7 @@ write_all_cb (GObject      *source_object,
               gpointer      user_data)
 {
   GOutputStream *stream = G_OUTPUT_STREAM (source_object);
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (user_data);
+  GTask *task = G_TASK (user_data);
 
   gssize bytes_written;
   GError *err = NULL;
@@ -1060,11 +1060,11 @@ write_all_cb (GObject      *source_object,
   bytes_written = g_output_stream_write_finish (stream, res, &err);
   if (bytes_written == -1)
   {
-    g_simple_async_result_take_error (simple, err);
+    g_task_async_result_take_error (task, err);
     goto done;
   }
   
-  write_data = g_simple_async_result_get_op_res_gpointer (simple);
+  write_data = g_task_propagate_pointer (task, error);
 
   write_data->bytes_written += bytes_written;
   if (write_data->bytes_written < write_data->count)
@@ -1073,13 +1073,13 @@ write_all_cb (GObject      *source_object,
                                  (const guint8 *)write_data->buffer + write_data->bytes_written,
                                  write_data->count - write_data->bytes_written,
                                  write_data->io_priority, write_data->cancellable,
-                                 write_all_cb, simple);
+                                 write_all_cb, task);
     return;
   }
 
 done:
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static void
@@ -1091,7 +1091,7 @@ write_all_async (GOutputStream      *stream,
                  GAsyncReadyCallback callback,
                  gpointer            user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   WriteAllData *write_data;
 
   write_data = g_slice_new0 (WriteAllData);
@@ -1101,13 +1101,13 @@ write_all_async (GOutputStream      *stream,
   if (cancellable)
     write_data->cancellable = g_object_ref (cancellable);
   
-  simple = g_simple_async_result_new (G_OBJECT (stream), callback, user_data,
+  task = g_task_new (stream, callback, user_data,
                                       write_all_async);
-  g_simple_async_result_set_op_res_gpointer (simple, write_data,
+  g_task_return_pointer (task, write_data,
                                              (GDestroyNotify)free_write_all_data);
   
   g_output_stream_write_async (stream, buffer, count, io_priority, cancellable,
-                               write_all_cb, simple);
+                               write_all_cb, task);
 }
 
 static gboolean
@@ -1116,14 +1116,14 @@ write_all_finish (GOutputStream *stream,
                   gsize         *bytes_written,
                   GError       **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res, G_OBJECT (stream),
+  g_return_val_if_fail (g_task_async_result_is_valid (res, G_OBJECT (stream),
                                                         write_all_async),
                         FALSE);
 
-  simple = (GSimpleAsyncResult *)res;
-  if (g_simple_async_result_propagate_error (simple, error))
+  task = (GTask *)res;
+  if (g_task_async_result_propagate_error (task, error))
     return FALSE;
   
   
@@ -1131,7 +1131,7 @@ write_all_finish (GOutputStream *stream,
   {
     WriteAllData *write_data;
   
-    write_data = g_simple_async_result_get_op_res_gpointer (simple);
+    write_data = g_task_propagate_pointer (task, error);
     *bytes_written = write_data->bytes_written;
   }
 
@@ -1154,10 +1154,10 @@ remove_first (GQueue *request_queue)
  result = write_all_finish (output, res, NULL, &err); \
  if (!result) \
   { \
-    if (req_data->simple) \
+    if (req_data->task) \
     { \
-      g_simple_async_result_set_from_error (req_data->simple, err); \
-      g_simple_async_result_complete (req_data->simple); \
+      g_task_return_error (req_data->task, err); \
+      g_task_async_result_complete (req_data->task); \
     } \
 \
     remove_first (priv->request_queue); \
@@ -1261,13 +1261,13 @@ send_request (GVfsAfpConnection *afp_connection)
   {
     if (req_data->cancellable && g_cancellable_is_cancelled (req_data->cancellable))
     {
-      if (req_data->simple)
+      if (req_data->task)
       {
         GError *err = NULL;
 
         g_cancellable_set_error_if_cancelled (req_data->cancellable, &err);
-        g_simple_async_result_take_error (req_data->simple, err);
-        g_simple_async_result_complete (req_data->simple);
+        g_task_async_result_take_error (req_data->task, err);
+        g_task_async_result_complete (req_data->task);
       }
       remove_first (priv->request_queue);
     }
@@ -1354,7 +1354,7 @@ g_vfs_afp_connection_send_command (GVfsAfpConnection   *afp_connection,
   req_data->command = g_object_ref (command);
   req_data->reply_buf = reply_buf;
 
-  req_data->simple = g_simple_async_result_new (G_OBJECT (afp_connection), callback,
+  req_data->task = g_task_new (afp_connection, callback,
                                                 user_data,
                                                 g_vfs_afp_connection_send_command);
   if (cancellable)
@@ -1370,19 +1370,19 @@ g_vfs_afp_connection_send_command_finish (GVfsAfpConnection *afp_connection,
                                           GAsyncResult *res,
                                           GError **error)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   
-  g_return_val_if_fail (g_simple_async_result_is_valid (res,
+  g_return_val_if_fail (g_task_async_result_is_valid (res,
                                                         G_OBJECT (afp_connection),
                                                         g_vfs_afp_connection_send_command),
                         NULL);
 
-  simple = (GSimpleAsyncResult *)res;
+  task = (GTask *)res;
   
-  if (g_simple_async_result_propagate_error (simple, error))
+  if (g_task_async_result_propagate_error (task, error))
     return NULL;
 
-  return g_object_ref (g_simple_async_result_get_op_res_gpointer (simple));
+  return g_object_ref (g_task_propagate_pointer (task, error));
 }
 
 static gboolean

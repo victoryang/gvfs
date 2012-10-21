@@ -750,20 +750,20 @@ mount_cb (DBusMessage *reply,
 
   if (!g_cancellable_is_cancelled (data->cancellable))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
       if (error != NULL)
-        simple = g_simple_async_result_new_from_error (G_OBJECT (data->volume),
+        task = g_task_new_from_error (G_OBJECT (data->volume),
                                                        data->callback,
                                                        data->user_data,
                                                        error);
       else
-        simple = g_simple_async_result_new (G_OBJECT (data->volume),
+        task = g_task_new (data->volume,
                                             data->callback,
                                             data->user_data,
                                             NULL);
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
     }
 
   /* free DBusOp */
@@ -811,21 +811,21 @@ mount_cancelled (GCancellable *cancellable,
                  gpointer      user_data)
 {
   DBusOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   DBusConnection *connection;
   DBusMessage *message;
   const char *name;
 
   G_LOCK (proxy_volume);
 
-  simple = g_simple_async_result_new_error (G_OBJECT (data->volume),
+  task = g_task_new_error (G_OBJECT (data->volume),
                                             data->callback,
                                             data->user_data,
                                             G_IO_ERROR,
                                             G_IO_ERROR_CANCELLED,
                                             _("Operation was cancelled"));
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 
   /* Now tell the remote volume monitor that the op has been cancelled */
   connection = g_proxy_volume_monitor_get_dbus_connection (data->volume->volume_monitor);
@@ -894,15 +894,15 @@ g_proxy_volume_mount (GVolume             *volume,
 
       if (g_cancellable_is_cancelled (cancellable))
         {
-          GSimpleAsyncResult *simple;
-          simple = g_simple_async_result_new_error (G_OBJECT (volume),
+          GTask *task;
+          task = g_task_new_error (G_OBJECT (volume),
                                                     callback,
                                                     user_data,
                                                     G_IO_ERROR,
                                                     G_IO_ERROR_CANCELLED,
                                                     _("Operation was cancelled"));
-          g_simple_async_result_complete_in_idle (simple);
-          g_object_unref (simple);
+          g_task_async_result_complete_in_idle (task);
+          g_object_unref (task);
           G_UNLOCK (proxy_volume);
           goto out;
         }
@@ -964,7 +964,7 @@ g_proxy_volume_mount_finish (GVolume        *volume,
                              GAsyncResult  *result,
                              GError       **error)
 {
-  if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+  if (g_task_async_result_propagate_error (G_TASK (result), error))
     return FALSE;
   return TRUE;
 }

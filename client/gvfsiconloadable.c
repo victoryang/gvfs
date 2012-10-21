@@ -162,13 +162,13 @@ g_vfs_icon_load (GLoadableIcon  *icon,
 
 typedef void (*AsyncPathCallCallback) (DBusMessage *reply,
 				       DBusConnection *connection,
-				       GSimpleAsyncResult *result,
+				       GTask *result,
 				       GCancellable *cancellable,
 				       gpointer callback_data);
 
 
 typedef struct {
-  GSimpleAsyncResult *result;
+  GTask *result;
   GVfsIcon *vfs_icon;
   char *op;
   GCancellable *cancellable;
@@ -203,12 +203,12 @@ async_path_call_done (DBusMessage *reply,
 		      gpointer _data)
 {
   AsyncPathCall *data = _data;
-  GSimpleAsyncResult *result;
+  GTask *result;
 
   if (io_error != NULL)
     {
-      g_simple_async_result_set_from_error (data->result, io_error);
-      _g_simple_async_result_complete_with_cancellable (data->result, data->cancellable);
+      g_task_return_error (data->result, io_error);
+      _g_task_async_result_complete_with_cancellable (data->result, data->cancellable);
       async_path_call_free (data);
     }
   else
@@ -238,8 +238,8 @@ do_async_path_call_callback (GMountInfo *mount_info,
   
   if (error != NULL)
     {
-      g_simple_async_result_set_from_error (data->result, error);      
-      _g_simple_async_result_complete_with_cancellable (data->result, data->cancellable);
+      g_task_return_error (data->result, error);      
+      _g_task_async_result_complete_with_cancellable (data->result, data->cancellable);
       async_path_call_free (data);
       return;
     }
@@ -287,7 +287,7 @@ do_async_path_call (GVfsIcon *vfs_icon,
 
   data = g_new0 (AsyncPathCall, 1);
 
-  data->result = g_simple_async_result_new (G_OBJECT (vfs_icon),
+  data->result = g_task_new (vfs_icon,
 					    op_callback, op_callback_data,
 					    NULL);
 
@@ -320,7 +320,7 @@ do_async_path_call (GVfsIcon *vfs_icon,
 }
 
 typedef struct {
-  GSimpleAsyncResult *result;
+  GTask *result;
   GCancellable *cancellable;
   gboolean can_seek;
 } GetFDData;
@@ -334,17 +334,17 @@ load_async_get_fd_cb (int fd,
 
   if (fd == -1)
     {
-      g_simple_async_result_set_error (data->result,
+      g_task_return_new_error (data->result,
 				       G_IO_ERROR, G_IO_ERROR_FAILED,
 				       _("Couldn't get stream file descriptor"));
     }
   else
     {
       stream = g_daemon_file_input_stream_new (fd, data->can_seek);
-      g_simple_async_result_set_op_res_gpointer (data->result, stream, g_object_unref);
+      g_task_return_pointer (data->result, stream, g_object_unref);
     }
 
-  _g_simple_async_result_complete_with_cancellable (data->result,
+  _g_task_async_result_complete_with_cancellable (data->result,
                                                     data->cancellable);
 
   g_object_unref (data->result);
@@ -356,7 +356,7 @@ load_async_get_fd_cb (int fd,
 static void
 load_async_cb (DBusMessage *reply,
 	       DBusConnection *connection,
-	       GSimpleAsyncResult *result,
+	       GTask *result,
 	       GCancellable *cancellable,
 	       gpointer callback_data)
 {
@@ -369,10 +369,10 @@ load_async_cb (DBusMessage *reply,
 			      DBUS_TYPE_BOOLEAN, &can_seek,
 			      DBUS_TYPE_INVALID))
     {
-      g_simple_async_result_set_error (result,
+      g_task_return_new_error (result,
 				       G_IO_ERROR, G_IO_ERROR_FAILED,
 				       _("Invalid return value from %s"), "open");
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
+      _g_task_async_result_complete_with_cancellable (result, cancellable);
       return;
     }
 
@@ -407,10 +407,10 @@ g_vfs_icon_load_finish (GLoadableIcon  *icon,
                          char          **type,
                          GError        **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
+  GTask *task = G_TASK (res);
   gpointer op;
 
-  op = g_simple_async_result_get_op_res_gpointer (simple);
+  op = g_task_propagate_pointer (task, error);
   if (op)
     return g_object_ref (op);
 

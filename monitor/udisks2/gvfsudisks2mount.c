@@ -514,7 +514,7 @@ gvfs_udisks2_mount_can_eject (GMount *_mount)
 typedef struct
 {
   volatile gint ref_count;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   gboolean completed;
 
   GVfsUDisks2Mount *mount;
@@ -543,7 +543,7 @@ unmount_data_unref (UnmountData *data)
 {
   if (g_atomic_int_dec_and_test (&data->ref_count))
     {
-      g_object_unref (data->simple);
+      g_object_unref (data->task);
 
       if (data->mount_op_reply_handler_id > 0)
         {
@@ -606,12 +606,12 @@ on_mount_op_reply (GMountOperation       *mount_operation,
       (result == G_MOUNT_OPERATION_HANDLED && choice == 1))
     {
       /* don't show an error dialog here */
-      g_simple_async_result_set_error (data->simple,
+      g_task_return_new_error (data->task,
                                        G_IO_ERROR,
                                        G_IO_ERROR_FAILED_HANDLED,
                                        "GMountOperation aborted (user should never see this "
                                        "error since it is G_IO_ERROR_FAILED_HANDLED)");
-      g_simple_async_result_complete_in_idle (data->simple);
+      g_task_async_result_complete_in_idle (data->task);
       data->completed = TRUE;
       unmount_data_unref (data);
     }
@@ -625,11 +625,11 @@ on_mount_op_reply (GMountOperation       *mount_operation,
       /* result == G_MOUNT_OPERATION_UNHANDLED => GMountOperation instance doesn't
        * support :show-processes signal
        */
-      g_simple_async_result_set_error (data->simple,
+      g_task_return_new_error (data->task,
                                        G_IO_ERROR,
                                        G_IO_ERROR_BUSY,
                                        _("One or more programs are preventing the unmount operation."));
-      g_simple_async_result_complete_in_idle (data->simple);
+      g_task_async_result_complete_in_idle (data->task);
       data->completed = TRUE;
       unmount_data_unref (data);
     }
@@ -758,8 +758,8 @@ lock_cb (GObject       *source_object,
   if (!udisks_encrypted_call_lock_finish (encrypted,
                                           res,
                                           &error))
-    g_simple_async_result_take_error (data->simple, error);
-  g_simple_async_result_complete (data->simple);
+    g_task_async_result_take_error (data->task, error);
+  g_task_async_result_complete (data->task);
   data->completed = TRUE;
   unmount_data_unref (data);
 }
@@ -786,7 +786,7 @@ unmount_cb (GObject       *source_object,
           unmount_show_busy (data, udisks_filesystem_get_mount_points (filesystem)[0]);
           goto out;
         }
-      g_simple_async_result_take_error (data->simple, error);
+      g_task_async_result_take_error (data->task, error);
     }
   else
     {
@@ -802,7 +802,7 @@ unmount_cb (GObject       *source_object,
         }
     }
 
-  g_simple_async_result_complete (data->simple);
+  g_task_async_result_complete (data->task);
   data->completed = TRUE;
   unmount_data_unref (data);
  out:
@@ -829,9 +829,9 @@ umount_command_cb (GObject       *source_object,
                                         &standard_error,
                                         &error))
     {
-      g_simple_async_result_take_error (data->simple, error);
-      g_simple_async_result_take_error (data->simple, error);
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_take_error (data->task, error);
+      g_task_async_result_take_error (data->task, error);
+      g_task_async_result_complete (data->task);
       data->completed = TRUE;
       unmount_data_unref (data);
       goto out;
@@ -840,7 +840,7 @@ umount_command_cb (GObject       *source_object,
   if (WIFEXITED (exit_status) && WEXITSTATUS (exit_status) == 0)
     {
       gvfs_udisks2_volume_monitor_update (data->mount->monitor);
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_complete (data->task);
       data->completed = TRUE;
       unmount_data_unref (data);
       goto out;
@@ -852,11 +852,11 @@ umount_command_cb (GObject       *source_object,
       goto out;
     }
 
-  g_simple_async_result_set_error (data->simple,
+  g_task_return_new_error (data->task,
                                    G_IO_ERROR,
                                    G_IO_ERROR_FAILED,
                                    standard_error);
-  g_simple_async_result_complete (data->simple);
+  g_task_async_result_complete (data->task);
   data->completed = TRUE;
   unmount_data_unref (data);
 
@@ -926,7 +926,7 @@ gvfs_udisks2_mount_unmount_with_operation (GMount              *_mount,
 
   data = g_new0 (UnmountData, 1);
   data->ref_count = 1;
-  data->simple = g_simple_async_result_new (G_OBJECT (mount),
+  data->task = g_task_new (mount,
                                             callback,
                                             user_data,
                                             gvfs_udisks2_mount_unmount_with_operation);
@@ -938,7 +938,7 @@ gvfs_udisks2_mount_unmount_with_operation (GMount              *_mount,
   if (mount->is_burn_mount)
     {
       /* burn mounts are really never mounted so complete successfully immediately */
-      g_simple_async_result_complete_in_idle (data->simple);
+      g_task_async_result_complete_in_idle (data->task);
       data->completed = TRUE;
       unmount_data_unref (data);
       goto out;
@@ -953,11 +953,11 @@ gvfs_udisks2_mount_unmount_with_operation (GMount              *_mount,
       object = g_dbus_interface_get_object (G_DBUS_INTERFACE (block));
       if (object == NULL)
         {
-          g_simple_async_result_set_error (data->simple,
+          g_task_return_new_error (data->task,
                                            G_IO_ERROR,
                                            G_IO_ERROR_FAILED,
                                            "No object for D-Bus interface");
-          g_simple_async_result_complete (data->simple);
+          g_task_async_result_complete (data->task);
           data->completed = TRUE;
           unmount_data_unref (data);
           goto out;
@@ -970,11 +970,11 @@ gvfs_udisks2_mount_unmount_with_operation (GMount              *_mount,
           data->encrypted = udisks_object_get_encrypted (UDISKS_OBJECT (object));
           if (data->encrypted == NULL)
             {
-              g_simple_async_result_set_error (data->simple,
+              g_task_return_new_error (data->task,
                                                G_IO_ERROR,
                                                G_IO_ERROR_FAILED,
                                                "No filesystem or encrypted interface on D-Bus object");
-              g_simple_async_result_complete (data->simple);
+              g_task_async_result_complete (data->task);
               data->completed = TRUE;
               unmount_data_unref (data);
               goto out;
@@ -988,11 +988,11 @@ gvfs_udisks2_mount_unmount_with_operation (GMount              *_mount,
               g_object_unref (cleartext_block);
               if (data->filesystem == NULL)
                 {
-                  g_simple_async_result_set_error (data->simple,
+                  g_task_return_new_error (data->task,
                                                    G_IO_ERROR,
                                                    G_IO_ERROR_FAILED,
                                                    "No filesystem interface on D-Bus object for cleartext device");
-                  g_simple_async_result_complete (data->simple);
+                  g_task_async_result_complete (data->task);
                   data->completed = TRUE;
                   unmount_data_unref (data);
                   goto out;
@@ -1012,7 +1012,7 @@ gvfs_udisks2_mount_unmount_with_operation_finish (GMount        *mount,
                                                   GAsyncResult  *result,
                                                   GError       **error)
 {
-  return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error);
+  return !g_task_async_result_propagate_error (G_TASK (result), error);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -1082,15 +1082,15 @@ gvfs_udisks2_mount_eject_with_operation (GMount              *_mount,
     }
   else
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (mount),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (mount),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_FAILED,
                                                 _("Operation not supported by backend"));
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 }
 
@@ -1114,7 +1114,7 @@ gvfs_udisks2_mount_eject_with_operation_finish (GMount        *_mount,
     }
   else
     {
-      g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error);
+      g_task_async_result_propagate_error (G_TASK (result), error);
       ret = FALSE;
     }
   return ret;
@@ -1224,13 +1224,13 @@ gvfs_udisks2_mount_guess_content_type (GMount              *mount,
                                        GAsyncReadyCallback  callback,
                                        gpointer             user_data)
 {
-  GSimpleAsyncResult *simple;
-  simple = g_simple_async_result_new (G_OBJECT (mount),
+  GTask *task;
+  task = g_task_new (mount,
                                       callback,
                                       user_data,
                                       NULL);
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
 }
 
 static gchar **

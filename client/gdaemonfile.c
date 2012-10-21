@@ -552,16 +552,14 @@ do_sync_2_path_call (GFile *file1,
 typedef void (*AsyncPathCallCallback) (DBusMessage *reply,
 				       DBusConnection *connection,
 				       GMountInfo *mount_info,
-				       GSimpleAsyncResult *result,
+				       GTask *task,
 				       GCancellable *cancellable,
 				       gpointer callback_data);
 
 
 typedef struct {
-  GSimpleAsyncResult *result;
   GFile *file;
   char *op;
-  GCancellable *cancellable;
   DBusMessage *args;
   AsyncPathCallCallback callback;
   gpointer callback_data;
@@ -575,12 +573,8 @@ async_path_call_free (AsyncPathCall *data)
   if (data->notify)
     data->notify (data->callback_data);
 
-  if (data->result)
-    g_object_unref (data->result);
   g_object_unref (data->file);
   g_free (data->op);
-  if (data->cancellable)
-    g_object_unref (data->cancellable);
   if (data->args)
     dbus_message_unref (data->args);
   if (data->mount_info)
@@ -594,30 +588,25 @@ async_path_call_done (DBusMessage *reply,
 		      GError *io_error,
 		      gpointer _data)
 {
-  AsyncPathCall *data = _data;
-  GSimpleAsyncResult *result;
+  GTask *task = _data;
+  AsyncPathCall *data = g_task_get_task_data (task);
 
   if (io_error != NULL)
     {
-      g_simple_async_result_set_from_error (data->result, io_error);
-      _g_simple_async_result_complete_with_cancellable (data->result, data->cancellable);
+      g_task_return_error (task, g_error_copy (io_error));
       async_path_call_free (data);
     }
   else
     {
-      result = data->result;
-      g_object_weak_ref (G_OBJECT (result), (GWeakNotify)async_path_call_free, data);
-      data->result = NULL;
-      
       data->callback (reply,
                       connection,
                       data->mount_info,
-		      result,
-		      data->cancellable,
+		      task,
+		      g_task_get_cancellable (task),
 		      data->callback_data);
 
       /* Free data here, or later if callback ref:ed the result */
-      g_object_unref (result);
+      g_object_unref (task);
     }
 }
 
@@ -626,7 +615,8 @@ do_async_path_call_callback (GMountInfo *mount_info,
 			     gpointer _data,
 			     GError *error)
 {
-  AsyncPathCall *data = _data;
+  GTask *task = _data;
+  AsyncPathCall *data = g_task_get_task_data (task);
   GDaemonFile *daemon_file = G_DAEMON_FILE (data->file);
   const char *path;
   DBusMessage *message;
@@ -634,9 +624,7 @@ do_async_path_call_callback (GMountInfo *mount_info,
   
   if (error != NULL)
     {
-      g_simple_async_result_set_from_error (data->result, error);      
-      _g_simple_async_result_complete_with_cancellable (data->result, data->cancellable);
-      async_path_call_free (data);
+      g_task_return_error (data->result, g_error_copy (error));      
       return;
     }
 
@@ -662,8 +650,8 @@ do_async_path_call_callback (GMountInfo *mount_info,
     }
 
   _g_vfs_daemon_call_async (message,
-			    async_path_call_done, data,
-			    data->cancellable);
+			    async_path_call_done, task,
+			    g_task_get_cancellable (task));
   
   dbus_message_unref (message);
 }
@@ -682,22 +670,20 @@ do_async_path_call (GFile *file,
 {
   GDaemonFile *daemon_file = G_DAEMON_FILE (file);
   va_list var_args;
+  GTask *task;
   AsyncPathCall *data;
 
+  task = g_task_new (file, cancellable, op_callback, op_callback_data);
+
   data = g_new0 (AsyncPathCall, 1);
-
-  data->result = g_simple_async_result_new (G_OBJECT (file),
-					    op_callback, op_callback_data,
-					    NULL);
-
   data->file = g_object_ref (file);
   data->op = g_strdup (op);
-  if (cancellable)
-    data->cancellable = g_object_ref (cancellable);
   data->callback = callback;
   data->callback_data = callback_data;
   data->notify = notify;
   
+  g_task_set_task_data (task, data, (GDestroyNotify) async_path_call_free);
+
   if (first_arg_type != 0)
     {
       data->args = dbus_message_new (DBUS_MESSAGE_TYPE_METHOD_CALL);
@@ -713,9 +699,9 @@ do_async_path_call (GFile *file,
   
   
   _g_daemon_vfs_get_mount_info_async (daemon_file->mount_spec,
-				     daemon_file->path,
-				     do_async_path_call_callback,
-				     data);
+				      daemon_file->path,
+				      do_async_path_call_callback,
+				      task);
 }
 
 
@@ -891,7 +877,7 @@ static void
 query_info_async_cb (DBusMessage *reply,
 		     DBusConnection *connection,
                      GMountInfo *mount_info,
-		     GSimpleAsyncResult *result,
+		     GTask *task,
 		     GCancellable *cancellable,
 		     gpointer callback_data)
 {
@@ -906,10 +892,9 @@ query_info_async_cb (DBusMessage *reply,
   if (!dbus_message_iter_init (reply, &iter) ||
       (dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_STRUCT))
     {
-      g_simple_async_result_set_error (result,
-				       G_IO_ERROR, G_IO_ERROR_FAILED,
-				       _("Invalid return value from %s"), "query_info");
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
+      g_task_return_new_error (task,
+			       G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "query_info");
       return;
     }
 
@@ -917,18 +902,15 @@ query_info_async_cb (DBusMessage *reply,
   info = _g_dbus_get_file_info (&iter, &error);
   if (info == NULL)
     {
-      g_simple_async_result_set_from_error (result, error);
-      g_error_free (error);
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
+      g_task_return_error (result, error);
       return;
     }
 
-  file = G_FILE (g_async_result_get_source_object (G_ASYNC_RESULT (result)));
+  file = g_task_get_source_object (task);
   add_metadata (file, attributes, info);
   g_object_unref (file);
 
-  g_simple_async_result_set_op_res_gpointer (result, info, g_object_unref);
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_pointer (result, info, g_object_unref);
 }
 
 static void
@@ -964,77 +946,60 @@ g_daemon_file_query_info_finish (GFile                      *file,
 				 GAsyncResult               *res,
 				 GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GFileInfo *info;
+  GTask *task = G_TASK (res);
 
-  info = g_simple_async_result_get_op_res_gpointer (simple);
-  if (info)
-    return g_object_ref (info);
-  
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
-
-typedef struct {
-  GSimpleAsyncResult *result;
-  GCancellable *cancellable;
-  gboolean can_seek;
-} GetFDData;
 
 static void
 read_async_get_fd_cb (int fd,
 		      gpointer callback_data)
 {
-  GetFDData *data = callback_data;
+  GTask *task = callback_data;
+  gboolean can_seek = GPOINTER_TO_INT (g_task_get_task_data (task));
   GFileInputStream *stream;
   
   if (fd == -1)
     {
-      g_simple_async_result_set_error (data->result,
-				       G_IO_ERROR, G_IO_ERROR_FAILED,
-				       _("Couldn't get stream file descriptor"));
+      g_task_return_new_error (task,
+			       G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Couldn't get stream file descriptor"));
     }
   else
     {
-      stream = g_daemon_file_input_stream_new (fd, data->can_seek);
-      g_simple_async_result_set_op_res_gpointer (data->result, stream, g_object_unref);
+      stream = g_daemon_file_input_stream_new (fd, can_seek);
+      g_task_return_pointer (task, stream, g_object_unref);
     }
 
-  _g_simple_async_result_complete_with_cancellable (data->result, data->cancellable);
-
-  g_object_unref (data->result);
-  g_free (data);
+  g_object_unref (task);
 }
 
 static void
 read_async_cb (DBusMessage *reply,
 	       DBusConnection *connection,
                GMountInfo *mount_info,
-	       GSimpleAsyncResult *result,
+	       GTask *task,
 	       GCancellable *cancellable,
 	       gpointer callback_data)
 {
   guint32 fd_id;
   dbus_bool_t can_seek;
-  GetFDData *get_fd_data;
   
   if (!dbus_message_get_args (reply, NULL,
 			      DBUS_TYPE_UINT32, &fd_id,
 			      DBUS_TYPE_BOOLEAN, &can_seek,
 			      DBUS_TYPE_INVALID))
     {
-      g_simple_async_result_set_error (result,
-				       G_IO_ERROR, G_IO_ERROR_FAILED,
-				       _("Invalid return value from %s"), "open");
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
+      g_task_return_new_error (task,
+			       G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "open");
       return;
     }
-  
-  get_fd_data = g_new0 (GetFDData, 1);
-  get_fd_data->result = g_object_ref (result);
-  get_fd_data->can_seek = can_seek;
+
+  g_task_set_task_data (task, GINT_TO_POINTER (can_seek), NULL);
   
   _g_dbus_connection_get_fd_async (connection, fd_id,
-				   read_async_get_fd_cb, get_fd_data);
+				   read_async_get_fd_cb, task);
 }
 
 static void
@@ -1062,14 +1027,9 @@ g_daemon_file_read_finish (GFile                  *file,
 			   GAsyncResult           *res,
 			   GError                **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  gpointer op;
+  GTask *task = G_TASK (res);
 
-  op = g_simple_async_result_get_op_res_gpointer (simple);
-  if (op)
-    return g_object_ref (op);
-  
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 
@@ -1317,25 +1277,23 @@ mount_mountable_location_mounted_cb (GObject *source_object,
 				     GAsyncResult *res,
 				     gpointer user_data)
 {
-  GSimpleAsyncResult *result = user_data;
+  GFile *file = G_FILE (source_object);
+  GTask *task = user_data;
   GError *error = NULL;
   
-  if (!g_file_mount_enclosing_volume_finish (G_FILE (source_object), res, &error))
-    {
-      g_simple_async_result_set_from_error (result, error);
-      g_error_free (error);
-    }
+  if (!g_file_mount_enclosing_volume_finish (file, res, &error))
+    g_task_return_error (task, error);
+  else
+    g_task_return_pointer (task, file, g_object_unref);
 
-  g_simple_async_result_complete (result);
-  g_object_unref (result);
-
+  g_object_unref (task);
 }
 
 static void
 mount_mountable_async_cb (DBusMessage *reply,
 			  DBusConnection *connection,
                           GMountInfo *mount_info,
-			  GSimpleAsyncResult *result,
+			  GTask *task,
 			  GCancellable *cancellable,
 			  gpointer callback_data)
 {
@@ -1356,11 +1314,9 @@ mount_mountable_async_cb (DBusMessage *reply,
 				      DBUS_TYPE_BOOLEAN, &must_mount_location,
 				      0))
     {
-      g_simple_async_result_set_error (result,
-				       G_IO_ERROR, G_IO_ERROR_FAILED,
-				       _("Invalid return value from %s"), "call");
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
-
+      g_task_return_new_error (task,
+			       G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "call");
       return;
     }
 
@@ -1373,10 +1329,9 @@ mount_mountable_async_cb (DBusMessage *reply,
       mount_spec = g_mount_spec_from_dbus (&iter);
       if (mount_spec == NULL)
 	{
-	  g_simple_async_result_set_error (result,
-					   G_IO_ERROR, G_IO_ERROR_FAILED,
-					   _("Invalid return value from %s"), "call");
-          _g_simple_async_result_complete_with_cancellable (result, cancellable);
+	  g_task_return_new_error (task,
+				   G_IO_ERROR, G_IO_ERROR_FAILED,
+				   _("Invalid return value from %s"), "call");
 	  return;
 	}
       
@@ -1385,7 +1340,6 @@ mount_mountable_async_cb (DBusMessage *reply,
     }
   
   g_free (path);
-  g_simple_async_result_set_op_res_gpointer (result, file, g_object_unref);
 
   if (must_mount_location)
     {
@@ -1394,11 +1348,10 @@ mount_mountable_async_cb (DBusMessage *reply,
 				     mount_operation,
 				     cancellable,
 				     mount_mountable_location_mounted_cb,
-				     g_object_ref (result));
-      
+				     g_object_ref (task));
     }
   else
-    _g_simple_async_result_complete_with_cancellable (result, cancellable);
+    g_task_return_pointer (task, file, g_object_unref);
 }
 
 static void
@@ -1438,25 +1391,20 @@ g_daemon_file_mount_mountable_finish (GFile               *file,
 				      GAsyncResult        *result,
 				      GError             **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (result);
-  GFile *result_file;
+  GTask *task = G_TASK (result);
   
-  result_file = g_simple_async_result_get_op_res_gpointer (simple);
-  if (result_file)
-    return g_object_ref (result_file);
-  
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 static void
 start_mountable_async_cb (DBusMessage *reply,
 			  DBusConnection *connection,
                           GMountInfo *mount_info,
-			  GSimpleAsyncResult *result,
+			  GTask *task,
 			  GCancellable *cancellable,
 			  gpointer callback_data)
 {
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -1503,11 +1451,11 @@ static void
 stop_mountable_async_cb (DBusMessage *reply,
                          DBusConnection *connection,
                          GMountInfo *mount_info,
-                         GSimpleAsyncResult *result,
+                         GTask *task,
                          GCancellable *cancellable,
                          gpointer callback_data)
 {
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -1557,11 +1505,11 @@ static void
 eject_mountable_async_cb (DBusMessage *reply,
 			  DBusConnection *connection,
                           GMountInfo *mount_info,
-			  GSimpleAsyncResult *result,
+			  GTask *task,
 			  GCancellable *cancellable,
 			  gpointer callback_data)
 {
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -1628,11 +1576,11 @@ static void
 unmount_mountable_async_cb (DBusMessage *reply,
 			    DBusConnection *connection,
                             GMountInfo *mount_info,
-			    GSimpleAsyncResult *result,
+			    GTask *task,
 			    GCancellable *cancellable,
 			    gpointer callback_data)
 {
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -1681,11 +1629,11 @@ static void
 poll_mountable_async_cb (DBusMessage *reply,
                          DBusConnection *connection,
                          GMountInfo *mount_info,
-                         GSimpleAsyncResult *result,
+                         GTask *task,
                          GCancellable *cancellable,
                          gpointer callback_data)
 {
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -1733,9 +1681,6 @@ g_daemon_file_unmount_mountable_finish (GFile               *file,
 typedef struct {
   GFile *file;
   GMountOperation *mount_operation;
-  GAsyncReadyCallback callback;
-  GCancellable *cancellable;
-  gpointer user_data;
 } MountData;
 
 static void g_daemon_file_mount_enclosing_volume (GFile *location,
@@ -1750,32 +1695,13 @@ mount_reply (DBusMessage *reply,
 	     GError *error,
 	     gpointer user_data)
 {
-  MountData *data = user_data;
-  GSimpleAsyncResult *res;
+  GTask *task = user_data;
+  GMountOperation *mount_operation = g_task_get_task_data (task);
 
   if (reply == NULL)
-    {
-      res = g_simple_async_result_new_from_error (G_OBJECT (data->file),
-						  data->callback,
-						  data->user_data,
-						  error);
-    }
+    g_task_return_error (task, g_error_copy (error));
   else
-    {
-      res = g_simple_async_result_new (G_OBJECT (data->file),
-				       data->callback,
-				       data->user_data,
-				       g_daemon_file_mount_enclosing_volume);
-    }
-
-  _g_simple_async_result_complete_with_cancellable (res, data->cancellable);
-  
-  g_object_unref (data->file);
-  if (data->cancellable)
-    g_object_unref (data->cancellable);
-  if (data->mount_operation)
-    g_object_unref (data->mount_operation);
-  g_free (data);
+    g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -1791,7 +1717,7 @@ g_daemon_file_mount_enclosing_volume (GFile *location,
   GMountSpec *spec;
   GMountSource *mount_source;
   DBusMessageIter iter;
-  MountData *data;
+  GTask *task;
   
   daemon_file = G_DAEMON_FILE (location);
   
@@ -1810,20 +1736,13 @@ g_daemon_file_mount_enclosing_volume (GFile *location,
   g_mount_source_to_dbus (mount_source, message);
   g_object_unref (mount_source);
 
-  data = g_new0 (MountData, 1);
-  data->callback = callback;
-  if (data->cancellable)
-    data->cancellable = g_object_ref (data->cancellable);
-  data->user_data = user_data;
-  data->file = g_object_ref (location);
-  if (mount_operation)
-    data->mount_operation = g_object_ref (mount_operation);
+  task = g_task_new (location, cancellable, callback, user_data);
 
   /* TODO: Ignoring cancellable here */
   _g_dbus_connection_call_async (_g_daemon_vfs_get_async_bus (),
 				 message,
 				 G_VFS_DBUS_MOUNT_TIMEOUT_MSECS,
-				 mount_reply, data);
+				 mount_reply, task);
  
   dbus_message_unref (message);
 }
@@ -1833,8 +1752,7 @@ g_daemon_file_mount_enclosing_volume_finish (GFile                  *location,
 					     GAsyncResult           *result,
 					     GError                **error)
 {
-  /* Errors handled in generic code */
-  return TRUE;
+  return g_task_propagate_boolean (G_TASK (result));
 }
 
 static GFileInfo *
@@ -1879,7 +1797,7 @@ static void
 query_fs_info_async_cb (DBusMessage *reply,
 			DBusConnection *connection,
                         GMountInfo *mount_info,
-			GSimpleAsyncResult *result,
+			GTask *task,
 			GCancellable *cancellable,
 			gpointer callback_data)
 {
@@ -1892,10 +1810,9 @@ query_fs_info_async_cb (DBusMessage *reply,
   if (!dbus_message_iter_init (reply, &iter) ||
       (dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_STRUCT))
     {
-      g_simple_async_result_set_error (result,
-				       G_IO_ERROR, G_IO_ERROR_FAILED,
-				       _("Invalid return value from %s"), "query_info");
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
+      g_task_return_new_error (task,
+			       G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "query_info");
       return;
     }
 
@@ -1903,14 +1820,11 @@ query_fs_info_async_cb (DBusMessage *reply,
   info = _g_dbus_get_file_info (&iter, &error);
   if (info == NULL)
     {
-      g_simple_async_result_set_from_error (result, error);
-      g_error_free (error);
-      _g_simple_async_result_complete_with_cancellable (result, cancellable);
+      g_task_return_error (task, error);
       return;
     }
 
-  g_simple_async_result_set_op_res_gpointer (result, info, g_object_unref);
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_pointer (result, info, g_object_unref);
 }
 
 static void
@@ -1935,14 +1849,9 @@ g_daemon_file_query_filesystem_info_finish (GFile                      *file,
 					    GAsyncResult               *res,
 					    GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GFileInfo *info;
+  GTask *task = G_TASK (res);
 
-  info = g_simple_async_result_get_op_res_gpointer (simple);
-  if (info)
-    return g_object_ref (info);
-  
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 static GMount *
@@ -2621,41 +2530,38 @@ g_daemon_file_monitor_file (GFile* file,
 
 typedef struct
 {
-  GSimpleAsyncResult *result;
-  GCancellable       *cancellable;
   dbus_bool_t         can_seek;
   guint64             initial_offset;
-}
-StreamOpenParams;
+} StreamOpenParams;
 
 static void
-stream_open_cb (gint fd, StreamOpenParams *params)
+free_stream_open_params (StreamOpenParams *params)
 {
+  g_slice_free (StreamOpenParams, params);
+}
+
+static void
+stream_open_cb (gint fd, GTask *task)
+{
+  StreamOpenParams *params = g_task_get_task_data (task);
   GFileOutputStream *output_stream;
 
   if (fd == -1)
     {
-      g_simple_async_result_set_error (params->result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       "%s", _("Didn't get stream file descriptor"));
-      goto out;
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       "%s", _("Didn't get stream file descriptor"));
+      return;
     }
 
   output_stream = g_daemon_file_output_stream_new (fd, params->can_seek, params->initial_offset);
-  g_simple_async_result_set_op_res_gpointer (params->result, output_stream, g_object_unref);
-
-out:
-  _g_simple_async_result_complete_with_cancellable (params->result, params->cancellable);
-  if (params->cancellable)
-    g_object_unref (params->cancellable);
-  g_object_unref (params->result);
-  g_slice_free (StreamOpenParams, params);
+  g_task_return_pointer (task, output_stream, g_object_unref);
 }
 
 static void
 append_to_async_cb (DBusMessage *reply,
                     DBusConnection *connection,
                     GMountInfo *mount_info,
-                    GSimpleAsyncResult *result,
+                    GTask *task,
                     GCancellable *cancellable,
                     gpointer callback_data)
 {
@@ -2670,21 +2576,16 @@ append_to_async_cb (DBusMessage *reply,
 			      DBUS_TYPE_UINT64, &open_params->initial_offset,
 			      DBUS_TYPE_INVALID))
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       _("Invalid return value from %s"), "open");
-      goto failure;
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "open");
+      g_slice_free (StreamOpenParams, open_params);
+      return;
     }
 
-  open_params->result = g_object_ref (result);
-  if (cancellable)
-    open_params->cancellable = g_object_ref (cancellable);
-  _g_dbus_connection_get_fd_async (connection, fd_id,
-                                   (GetFdAsyncCallback) stream_open_cb, open_params);
-  return;
+  g_task_set_task_data (task, open_params, (GDestroyNotify) free_stream_open_params);
 
-failure:
-  g_slice_free (StreamOpenParams, open_params);
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  _g_dbus_connection_get_fd_async (connection, fd_id,
+                                   (GetFdAsyncCallback) stream_open_cb, task);
 }
 
 static void
@@ -2726,21 +2627,16 @@ g_daemon_file_append_to_finish (GFile                      *file,
                                 GAsyncResult               *res,
                                 GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GFileOutputStream *output_stream;
+  GTask *task = G_TASK (res);
 
-  output_stream = g_simple_async_result_get_op_res_gpointer (simple);
-  if (output_stream)
-    return g_object_ref (output_stream);
-
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 static void
 create_async_cb (DBusMessage *reply,
                  DBusConnection *connection,
                  GMountInfo *mount_info,
-                 GSimpleAsyncResult *result,
+                 GTask *task,
                  GCancellable *cancellable,
                  gpointer callback_data)
 {
@@ -2755,19 +2651,16 @@ create_async_cb (DBusMessage *reply,
 			      DBUS_TYPE_UINT64, &open_params->initial_offset,
 			      DBUS_TYPE_INVALID))
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       _("Invalid return value from %s"), "open");
-      goto failure;
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "open");
+      g_slice_free (StreamOpenParams, open_params);
+      return;
     }
 
-  open_params->result = g_object_ref (result);
-  _g_dbus_connection_get_fd_async (connection, fd_id,
-                                   (GetFdAsyncCallback) stream_open_cb, open_params);
-  return;
+  g_task_set_task_data (task, open_params, (GDestroyNotify) free_stream_open_params);
 
-failure:
-  g_slice_free (StreamOpenParams, open_params);
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  _g_dbus_connection_get_fd_async (connection, fd_id,
+                                   (GetFdAsyncCallback) stream_open_cb, task);
 }
 
 static void
@@ -2809,39 +2702,30 @@ g_daemon_file_create_finish (GFile                      *file,
                              GAsyncResult               *res,
                              GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GFileOutputStream *output_stream;
+  GTask *task = G_TASK (res);
 
-  output_stream = g_simple_async_result_get_op_res_gpointer (simple);
-  if (output_stream)
-    return g_object_ref (output_stream);
-
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 static void
 enumerate_children_async_cb (DBusMessage *reply,
                              DBusConnection *connection,
                              GMountInfo *mount_info,
-                             GSimpleAsyncResult *result,
+                             GTask *task,
                              GCancellable *cancellable,
                              gpointer callback_data)
 {
   GDaemonFileEnumerator *enumerator = callback_data;
 
   if (reply == NULL || connection == NULL)
-  {
-    g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                     _("Invalid return value from %s"), "enumerate_children");
-    goto out;
-  }
+    {
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "enumerate_children");
+      return;
+    }
 
   g_object_ref (enumerator);
-
-  g_simple_async_result_set_op_res_gpointer (result, enumerator, g_object_unref);
-
-out:
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_pointer (result, enumerator, g_object_unref);
 }
 
 static void
@@ -2885,50 +2769,33 @@ g_daemon_file_enumerate_children_finish (GFile                      *file,
                                          GAsyncResult               *res,
                                          GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GDaemonFileEnumerator *enumerator;
+  GTask *task = G_TASK (res);
 
-  enumerator = g_simple_async_result_get_op_res_gpointer (simple);
-  if (enumerator)
-    return g_object_ref (enumerator);
-
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
-
-typedef struct
-{
-  GFile              *file;
-  GSimpleAsyncResult *result;
-  GCancellable       *cancellable;
-}
-FindEnclosingMountData;
 
 static void
 find_enclosing_mount_cb (GMountInfo *mount_info,
                          gpointer user_data,
                          GError *error)
 {
-  FindEnclosingMountData *data = user_data;
-  GError *my_error = NULL;
+  GTask *task = user_data;
 
-  if (data->cancellable && g_cancellable_set_error_if_cancelled (data->cancellable, &my_error))
-    {
-      g_simple_async_result_set_from_error (data->result, my_error);
-      goto out;
-    }
+  if (g_task_return_error_if_cancelled (task))
+    return;
 
   if (error)
     {
-      g_simple_async_result_set_from_error (data->result, error);
-      goto out;
+      g_task_return_error (task, g_error_copy (error));
+      return;
     }
 
   if (!mount_info)
     {
-      g_simple_async_result_set_error (data->result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       "Internal error: \"%s\"",
-                                       "No error but no mount info from g_daemon_vfs_get_mount_info_async");
-      goto out;
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       "Internal error: \"%s\"",
+			       "No error but no mount info from g_daemon_vfs_get_mount_info_async");
+      return;
     }
 
   if (mount_info->user_visible)
@@ -2941,23 +2808,14 @@ find_enclosing_mount_cb (GMountInfo *mount_info,
         mount = g_daemon_mount_new (mount_info, NULL);
       
       if (mount)
-        g_simple_async_result_set_op_res_gpointer (data->result, mount, g_object_unref);
+        g_task_return_pointer (task, mount, g_object_unref);
       else
-        g_simple_async_result_set_error (data->result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                         "Internal error: \"%s\"",
-                                         "Mount info did not yield a mount");
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+				 "Internal error: \"%s\"",
+				 "Mount info did not yield a mount");
     }
-
-out:
-  _g_simple_async_result_complete_with_cancellable (data->result, data->cancellable);
-
-  if (my_error)
-    g_error_free (my_error);
-  if (data->cancellable)
-    g_object_unref (data->cancellable);
-  g_object_unref (data->file);
-  g_object_unref (data->result);
-  g_free (data);
+  else
+    g_task_return_pointer (task, NULL, NULL);
 }
 
 static void
@@ -2967,23 +2825,15 @@ g_daemon_file_find_enclosing_mount_async (GFile                *file,
                                           GAsyncReadyCallback   callback,
                                           gpointer              user_data)
 {
-  GDaemonFile            *daemon_file = G_DAEMON_FILE (file);
-  FindEnclosingMountData *data;
+  GDaemonFile *daemon_file = G_DAEMON_FILE (file);
+  GTask *task;
 
-  data = g_new0 (FindEnclosingMountData, 1);
-
-  data->result = g_simple_async_result_new (G_OBJECT (file),
-                                            callback, user_data,
-                                            NULL);
-  data->file = g_object_ref (file);
-
-  if (cancellable)
-    data->cancellable = g_object_ref (cancellable);
+  task = g_task_new (file, cancellable, callback, user_data);
 
   _g_daemon_vfs_get_mount_info_async (daemon_file->mount_spec,
                                       daemon_file->path,
                                       find_enclosing_mount_cb,
-                                      data);
+                                      task);
 }
 
 static GMount *
@@ -2991,21 +2841,16 @@ g_daemon_file_find_enclosing_mount_finish (GFile              *file,
                                            GAsyncResult       *res,
                                            GError            **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GMount             *mount;
+  GTask *task = G_TASK (res);
 
-  mount = g_simple_async_result_get_op_res_gpointer (simple);
-  if (mount)
-    return g_object_ref (mount);
-
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 static void
 replace_async_cb (DBusMessage *reply,
                   DBusConnection *connection,
                   GMountInfo *mount_info,
-                  GSimpleAsyncResult *result,
+                  GTask *task,
                   GCancellable *cancellable,
                   gpointer callback_data)
 {
@@ -3020,19 +2865,16 @@ replace_async_cb (DBusMessage *reply,
 			      DBUS_TYPE_UINT64, &open_params->initial_offset,
 			      DBUS_TYPE_INVALID))
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       _("Invalid return value from %s"), "open");
-      goto failure;
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "open");
+      g_slice_free (StreamOpenParams, open_params);
+      return;
     }
 
-  open_params->result = g_object_ref (result);
-  _g_dbus_connection_get_fd_async (connection, fd_id,
-                                   (GetFdAsyncCallback) stream_open_cb, open_params);
-  return;
+  g_task_set_task_data (task, open_params, (GDestroyNotify) free_stream_open_params);
 
-failure:
-  g_slice_free (StreamOpenParams, open_params);
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  _g_dbus_connection_get_fd_async (connection, fd_id,
+                                   (GetFdAsyncCallback) stream_open_cb, task);
 }
 
 static void
@@ -3073,21 +2915,16 @@ g_daemon_file_replace_finish (GFile                      *file,
                               GAsyncResult               *res,
                               GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GFileOutputStream *output_stream;
+  GTask *task = G_TASK (res);
 
-  output_stream = g_simple_async_result_get_op_res_gpointer (simple);
-  if (output_stream)
-    return g_object_ref (output_stream);
-
-  return NULL;
+  return g_task_propagate_pointer (task, error);
 }
 
 static void
 set_display_name_async_cb (DBusMessage *reply,
                            DBusConnection *connection,
                            GMountInfo *mount_info,
-                           GSimpleAsyncResult *result,
+                           GTask *task,
                            GCancellable *cancellable,
                            gpointer callback_data)
 {
@@ -3101,9 +2938,9 @@ set_display_name_async_cb (DBusMessage *reply,
 				      G_DBUS_TYPE_CSTRING, &new_path,
 				      0))
     {
-      g_simple_async_result_set_error (result, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       _("Invalid return value from %s"), "set_display_name");
-      goto out;
+      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+			       _("Invalid return value from %s"), "set_display_name");
+      return;
     }
 
   g_mount_info_apply_prefix (mount_info, &new_path);
@@ -3111,10 +2948,7 @@ set_display_name_async_cb (DBusMessage *reply,
 
   g_free (new_path);
 
-  g_simple_async_result_set_op_res_gpointer (result, file, g_object_unref);
-
-out:
-  _g_simple_async_result_complete_with_cancellable (result, cancellable);
+  g_task_return_pointer (task, file, g_object_unref);
 }
 
 static void
@@ -3141,11 +2975,9 @@ g_daemon_file_set_display_name_finish (GFile                      *file,
                                        GAsyncResult               *res,
                                        GError                    **error)
 {
-  GSimpleAsyncResult *simple = G_SIMPLE_ASYNC_RESULT (res);
-  GFile *new_file;
+  GTask *task = G_TASK (res);
 
-  new_file = g_simple_async_result_get_op_res_gpointer (simple);
-  return new_file;
+  return g_task_propagate_pointer (task, error);
 }
 
 #if 0

@@ -691,7 +691,7 @@ static void
 spawn_cb (GPid pid, gint status, gpointer user_data)
 {
   SpawnOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   /* ensure that the #GHalMount corrosponding to the #GHalVolume we've
    * mounted is made available before returning to the user (make sure
@@ -705,7 +705,7 @@ spawn_cb (GPid pid, gint status, gpointer user_data)
       error = g_error_new_literal (G_IO_ERROR, 
                                    G_IO_ERROR_FAILED_HANDLED,
                                    "You are not supposed to show G_IO_ERROR_FAILED_HANDLED in the UI");
-      simple = g_simple_async_result_new_from_error (data->object,
+      task = g_task_new_from_error (data->object,
                                                      data->callback,
                                                      data->user_data,
                                                      error);
@@ -713,14 +713,14 @@ spawn_cb (GPid pid, gint status, gpointer user_data)
     }
   else
     {
-      simple = g_simple_async_result_new (data->object,
+      task = g_task_new (data->object,
                                           data->callback,
                                           data->user_data,
                                           NULL);
     }
 
-  g_simple_async_result_complete (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete (task);
+  g_object_unref (task);
   g_object_unref (data->object);
   g_free (data);
 }
@@ -752,7 +752,7 @@ spawn_do (GVolume             *volume,
                       &child_pid,
                       &error))
     {
-      g_simple_async_report_gerror_in_idle (data->object,
+      g_task_async_report_gerror_in_idle (data->object,
                                             data->callback,
                                             data->user_data,
                                             error);

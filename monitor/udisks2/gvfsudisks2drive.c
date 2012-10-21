@@ -496,7 +496,7 @@ unmount_mounts_cb (GObject      *source_object,
 {
   UnmountMountsOp *data = user_data;
   GMount *mount = G_MOUNT (source_object);
-  GSimpleAsyncResult *simple;
+  GTask *task;
   GError *error = NULL;
 
   if (!g_mount_unmount_with_operation_finish (mount, res, &error))
@@ -511,13 +511,13 @@ unmount_mounts_cb (GObject      *source_object,
         }
 
       /* unmount failed; need to fail the whole eject operation */
-      simple = g_simple_async_result_new_from_error (G_OBJECT (data->drive),
+      task = g_task_new_from_error (G_OBJECT (data->drive),
                                                      data->callback,
                                                      data->user_data,
                                                      error);
       g_error_free (error);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
 
       free_unmount_mounts_op (data);
     }
@@ -568,7 +568,7 @@ unmount_mounts (GVfsUDisks2Drive    *drive,
 
 typedef struct
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   GVfsUDisks2Drive *drive;
 } EjectData;
@@ -576,7 +576,7 @@ typedef struct
 static void
 eject_data_free (EjectData *data)
 {
-  g_object_unref (data->simple);
+  g_object_unref (data->task);
   g_clear_object (&data->drive);
   g_free (data);
 }
@@ -593,12 +593,12 @@ eject_cb (GObject      *source_object,
   if (!udisks_drive_call_eject_finish (UDISKS_DRIVE (source_object), res, &error))
     {
       gvfs_udisks2_utils_udisks_error_to_gio_error (error);
-      g_simple_async_result_take_error (data->simple, error);
-      g_simple_async_result_complete (data->simple);
+      g_task_async_result_take_error (data->task, error);
+      g_task_async_result_complete (data->task);
       goto out;
     }
 
-  g_simple_async_result_complete (data->simple);
+  g_task_async_result_complete (data->task);
 
  out:
   eject_data_free (data);
@@ -617,7 +617,7 @@ gvfs_udisks2_drive_eject_on_all_unmounted (GDrive              *_drive,
   EjectData *data;
 
   data = g_new0 (EjectData, 1);
-  data->simple = g_simple_async_result_new (G_OBJECT (drive),
+  data->task = g_task_new (drive,
                                             callback,
                                             user_data,
                                             gvfs_udisks2_drive_eject_on_all_unmounted);
@@ -663,7 +663,7 @@ gvfs_udisks2_drive_eject_with_operation_finish (GDrive        *drive,
                                                 GAsyncResult  *result,
                                                 GError       **error)
 {
-  return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error);
+  return !g_task_async_result_propagate_error (G_TASK (result), error);
 }
 
 static void

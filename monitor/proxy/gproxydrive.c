@@ -526,21 +526,21 @@ operation_cancelled (GCancellable *cancellable,
                      gpointer      user_data)
 {
   DBusOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   DBusConnection *connection;
   DBusMessage *message;
   const char *name;
 
   G_LOCK (proxy_drive);
 
-  simple = g_simple_async_result_new_error (G_OBJECT (data->drive),
+  task = g_task_new_error (G_OBJECT (data->drive),
                                             data->callback,
                                             data->user_data,
                                             G_IO_ERROR,
                                             G_IO_ERROR_CANCELLED,
                                             _("Operation was cancelled"));
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 
   /* Now tell the remote volume monitor that the op has been cancelled */
   connection = g_proxy_volume_monitor_get_dbus_connection (data->drive->volume_monitor);
@@ -577,20 +577,20 @@ eject_cb (DBusMessage *reply,
 
   if (!g_cancellable_is_cancelled (data->cancellable))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
       if (error != NULL)
-        simple = g_simple_async_result_new_from_error (G_OBJECT (data->drive),
+        task = g_task_new_from_error (G_OBJECT (data->drive),
                                                        data->callback,
                                                        data->user_data,
                                                        error);
       else
-        simple = g_simple_async_result_new (G_OBJECT (data->drive),
+        task = g_task_new (data->drive,
                                             data->callback,
                                             data->user_data,
                                             NULL);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 
   g_proxy_mount_operation_destroy (data->mount_op_id);
@@ -620,15 +620,15 @@ g_proxy_drive_eject_with_operation (GDrive              *drive,
 
   if (g_cancellable_is_cancelled (cancellable))
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (drive),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (drive),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_CANCELLED,
                                                 _("Operation was cancelled"));
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
       G_UNLOCK (proxy_drive);
       goto out;
     }
@@ -688,7 +688,7 @@ g_proxy_drive_eject_with_operation_finish (GDrive        *drive,
                                            GAsyncResult  *result,
                                            GError       **error)
 {
-  if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+  if (g_task_async_result_propagate_error (G_TASK (result), error))
     return FALSE;
   return TRUE;
 }
@@ -725,20 +725,20 @@ stop_cb (DBusMessage *reply,
 
   if (!g_cancellable_is_cancelled (data->cancellable))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
       if (error != NULL)
-        simple = g_simple_async_result_new_from_error (G_OBJECT (data->drive),
+        task = g_task_new_from_error (G_OBJECT (data->drive),
                                                        data->callback,
                                                        data->user_data,
                                                        error);
       else
-        simple = g_simple_async_result_new (G_OBJECT (data->drive),
+        task = g_task_new (data->drive,
                                             data->callback,
                                             data->user_data,
                                             NULL);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 
   g_proxy_mount_operation_destroy (data->mount_op_id);
@@ -768,15 +768,15 @@ g_proxy_drive_stop (GDrive              *drive,
 
   if (g_cancellable_is_cancelled (cancellable))
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (drive),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (drive),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_CANCELLED,
                                                 _("Operation was cancelled"));
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
       G_UNLOCK (proxy_drive);
       goto out;
     }
@@ -836,7 +836,7 @@ g_proxy_drive_stop_finish (GDrive        *drive,
                            GAsyncResult  *result,
                            GError       **error)
 {
-  if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+  if (g_task_async_result_propagate_error (G_TASK (result), error))
     return FALSE;
   return TRUE;
 }
@@ -865,20 +865,20 @@ start_cb (DBusMessage  *reply,
 
   if (!g_cancellable_is_cancelled (data->cancellable))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
       if (error != NULL)
-        simple = g_simple_async_result_new_from_error (G_OBJECT (data->drive),
+        task = g_task_new_from_error (G_OBJECT (data->drive),
                                                        data->callback,
                                                        data->user_data,
                                                        error);
       else
-        simple = g_simple_async_result_new (G_OBJECT (data->drive),
+        task = g_task_new (data->drive,
                                             data->callback,
                                             data->user_data,
                                             NULL);
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
     }
 
   /* free DBusStartOp */
@@ -897,21 +897,21 @@ start_cancelled (GCancellable *cancellable,
                  gpointer      user_data)
 {
   DBusStartOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   DBusConnection *connection;
   DBusMessage *message;
   const char *name;
 
   G_LOCK (proxy_drive);
 
-  simple = g_simple_async_result_new_error (G_OBJECT (data->drive),
+  task = g_task_new_error (G_OBJECT (data->drive),
                                             data->callback,
                                             data->user_data,
                                             G_IO_ERROR,
                                             G_IO_ERROR_CANCELLED,
                                             _("Operation was cancelled"));
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 
   /* Now tell the remote drive monitor that the op has been cancelled */
   connection = g_proxy_volume_monitor_get_dbus_connection (data->drive->volume_monitor);
@@ -954,15 +954,15 @@ g_proxy_drive_start (GDrive              *drive,
 
   if (g_cancellable_is_cancelled (cancellable))
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (drive),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (drive),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_CANCELLED,
                                                 _("Operation was cancelled"));
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
       G_UNLOCK (proxy_drive);
       goto out;
     }
@@ -1023,7 +1023,7 @@ g_proxy_drive_start_finish (GDrive        *drive,
                             GAsyncResult  *result,
                             GError       **error)
 {
-  if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+  if (g_task_async_result_propagate_error (G_TASK (result), error))
     return FALSE;
   return TRUE;
 }
@@ -1037,20 +1037,20 @@ poll_for_media_cb (DBusMessage *reply,
 {
   if (!g_cancellable_is_cancelled (data->cancellable))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
 
       if (error != NULL)
-        simple = g_simple_async_result_new_from_error (G_OBJECT (data->drive),
+        task = g_task_new_from_error (G_OBJECT (data->drive),
                                                        data->callback,
                                                        data->user_data,
                                                        error);
       else
-        simple = g_simple_async_result_new (G_OBJECT (data->drive),
+        task = g_task_new (data->drive,
                                             data->callback,
                                             data->user_data,
                                             NULL);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 
   g_object_unref (data->drive);
@@ -1078,15 +1078,15 @@ g_proxy_drive_poll_for_media (GDrive              *drive,
 
   if (g_cancellable_is_cancelled (cancellable))
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (drive),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (drive),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_CANCELLED,
                                                 _("Operation was cancelled"));
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
       G_UNLOCK (proxy_drive);
       goto out;
     }
@@ -1141,7 +1141,7 @@ g_proxy_drive_poll_for_media_finish (GDrive        *drive,
                                      GAsyncResult  *result,
                                      GError       **error)
 {
-  if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+  if (g_task_async_result_propagate_error (G_TASK (result), error))
     return FALSE;
   return TRUE;
 }

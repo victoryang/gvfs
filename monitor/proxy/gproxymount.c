@@ -473,21 +473,21 @@ operation_cancelled (GCancellable *cancellable,
                      gpointer      user_data)
 {
   DBusOp *data = user_data;
-  GSimpleAsyncResult *simple;
+  GTask *task;
   DBusConnection *connection;
   DBusMessage *message;
   const char *name;
 
   G_LOCK (proxy_mount);
 
-  simple = g_simple_async_result_new_error (G_OBJECT (data->mount),
+  task = g_task_new_error (G_OBJECT (data->mount),
                                             data->callback,
                                             data->user_data,
                                             G_IO_ERROR,
                                             G_IO_ERROR_CANCELLED,
                                             _("Operation was cancelled"));
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 
   /* Now tell the remote volume monitor that the op has been cancelled */
   connection = g_proxy_volume_monitor_get_dbus_connection (data->mount->volume_monitor);
@@ -522,19 +522,19 @@ unmount_cb (DBusMessage *reply,
 
   if (!g_cancellable_is_cancelled (data->cancellable))
     {
-      GSimpleAsyncResult *simple;
+      GTask *task;
       if (error != NULL)
-        simple = g_simple_async_result_new_from_error (G_OBJECT (data->mount),
+        task = g_task_new_from_error (G_OBJECT (data->mount),
                                                        data->callback,
                                                        data->user_data,
                                                        error);
       else
-        simple = g_simple_async_result_new (G_OBJECT (data->mount),
+        task = g_task_new (data->mount,
                                             data->callback,
                                             data->user_data,
                                             NULL);
-      g_simple_async_result_complete (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete (task);
+      g_object_unref (task);
     }
 
   g_proxy_mount_operation_destroy (data->mount_op_id);
@@ -564,15 +564,15 @@ g_proxy_mount_unmount_with_operation (GMount              *mount,
 
   if (g_cancellable_is_cancelled (cancellable))
     {
-      GSimpleAsyncResult *simple;
-      simple = g_simple_async_result_new_error (G_OBJECT (mount),
+      GTask *task;
+      task = g_task_new_error (G_OBJECT (mount),
                                                 callback,
                                                 user_data,
                                                 G_IO_ERROR,
                                                 G_IO_ERROR_CANCELLED,
                                                 _("Operation was cancelled"));
-      g_simple_async_result_complete_in_idle (simple);
-      g_object_unref (simple);
+      g_task_async_result_complete_in_idle (task);
+      g_object_unref (task);
       G_UNLOCK (proxy_mount);
       goto out;
     }
@@ -633,7 +633,7 @@ g_proxy_mount_unmount_with_operation_finish (GMount        *mount,
                                              GAsyncResult  *result,
                                              GError       **error)
 {
-  if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+  if (g_task_async_result_propagate_error (G_TASK (result), error))
     return FALSE;
   return TRUE;
 }
@@ -663,15 +663,15 @@ g_proxy_mount_guess_content_type (GMount              *mount,
                                   GAsyncReadyCallback  callback,
                                   gpointer             user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
 
   /* TODO: handle force_rescan */
-  simple = g_simple_async_result_new (G_OBJECT (mount),
+  task = g_task_new (mount,
                                       callback,
                                       user_data,
                                       NULL);
-  g_simple_async_result_complete_in_idle (simple);
-  g_object_unref (simple);
+  g_task_async_result_complete_in_idle (task);
+  g_object_unref (task);
 }
 
 static char **
