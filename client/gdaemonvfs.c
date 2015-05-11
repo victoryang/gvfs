@@ -845,7 +845,6 @@ async_get_mount_info_response (GVfsDBusMountTracker *proxy,
     {
       /* g_warning ("Error from org.gtk.vfs.MountTracker.lookupMount(): %s", error->message); */
       data->callback (NULL, data->user_data, error);
-      g_error_free (error);
     }
   else
     {
@@ -887,7 +886,6 @@ get_mount_info_async_got_proxy_cb (GObject *source_object,
       g_warning ("Error creating MountTracker proxy: %s", error->message);
       data->callback (NULL, data->user_data, error);
       free_get_mount_info_data (data);
-      g_error_free (error);
       return;
     }
   
