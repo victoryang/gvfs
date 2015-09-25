@@ -1,0 +1,5 @@
+[RemoteVolumeMonitor]
+Name=GProxyVolumeMonitorStoraged
+DBusName=org.gtk.vfs.StoragedVolumeMonitor
+IsNative=true
+NativePriority=5

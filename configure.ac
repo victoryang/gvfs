@@ -260,6 +260,25 @@ fi
 
 AM_CONDITIONAL(USE_UDISKS2, [test "$msg_udisks2" = "yes"])
 
+dnl **************************
+dnl *** Check for storaged ***
+dnl **************************
+
+AC_ARG_ENABLE([storaged], [AS_HELP_STRING([--disable-storaged],[build without libstoraged])])
+msg_storaged=no
+STORAGED_REQUIRED=1.97
+
+if test "x$enable_storaged" != "xno"; then
+  PKG_CHECK_EXISTS([storaged >= $STORAGED_REQUIRED], [msg_storaged=yes])
+
+  if test "x$msg_storaged" = "xyes"; then
+    PKG_CHECK_MODULES([STORAGED],[storaged >= $STORAGED_REQUIRED])
+    AC_DEFINE([HAVE_STORAGED], 1, [Define to 1 if libstoraged is available])
+  fi
+fi
+
+AM_CONDITIONAL(USE_STORAGED, [test "$msg_storaged" = "yes"])
+
 dnl **********************************
 dnl *** Check for libsystemd-login ***
 dnl **********************************
@@ -912,6 +931,7 @@ monitor/gphoto2/Makefile
 monitor/afc/Makefile
 monitor/mtp/Makefile
 monitor/goa/Makefile
+monitor/storaged/Makefile
 programs/Makefile
 programs/completion/Makefile
 man/Makefile
@@ -943,6 +963,7 @@ echo "
 	Build HAL volume monitor:     $msg_hal (with fast init path: $have_hal_fast_init)
 	Build GDU volume monitor:     $msg_gdu
 	Build udisks2 volume monitor: $msg_udisks2
+        Build storaged volume monitor: $msg_storaged
 	Build GOA volume monitor:     $msg_goa
         Use libsystemd-login:         $msg_libsystemd_login
         Use GCR:                      $msg_gcr

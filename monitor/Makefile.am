@@ -1,4 +1,4 @@
-DIST_SUBDIRS = proxy hal gdu gphoto2 afc udisks2 mtp goa
+DIST_SUBDIRS = proxy hal gdu gphoto2 afc udisks2 mtp goa storaged
 SUBDIRS = proxy
 
 if USE_HAL
@@ -27,4 +27,8 @@ endif
 
 if USE_GOA
 SUBDIRS += goa
+endif
+
+if USE_STORAGED
+SUBDIRS += storaged
 endif
